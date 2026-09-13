@@ -93,6 +93,12 @@
 		"micHint": "Speak to check your microphone",
 		"noMicrophones": "No microphone found",
 		"preview": "Preview",
-		"previewUnavailable": "Preview unavailable"
+		"previewUnavailable": "Preview unavailable",
+		"storage": "Storage",
+		"storageHint": "Where recordings are cached while capturing and saved when you stop.",
+		"chooseFolder": "Choose folder",
+		"resetToDefault": "Reset to default",
+		"changingFolder": "Moving…",
+		"changeFolderFailed": "Couldn't switch to that folder"
 	}
 }

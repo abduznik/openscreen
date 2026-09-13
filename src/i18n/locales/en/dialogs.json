@@ -86,6 +86,7 @@
 		"mp4Video": "MP4 Video",
 		"videoFiles": "Video Files",
 		"openscreenProject": "OpenScreen Project",
-		"allFiles": "All Files"
+		"allFiles": "All Files",
+		"selectRecordingsFolder": "Select Recordings Folder"
 	}
 }

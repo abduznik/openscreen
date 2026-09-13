@@ -54,7 +54,7 @@ import { DocumentService } from "../ai-edition/document-service";
 import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
-import { RECORDINGS_DIR } from "../main";
+import { getRecordingsDirInfo, RECORDINGS_DIR, setRecordingsDir } from "../main";
 import { type AudioPeaksResult, getAudioPeaks } from "../media/audioPeaks";
 import {
 	readCursorRecordingFile as readCursorRecordingFileFrom,
@@ -1756,6 +1756,48 @@ export function registerIpcHandlers(
 			mainWin.webContents.send("recording-prefs-changed", recordingPrefs);
 		}
 		return recordingPrefs;
+	});
+
+	ipcMain.handle("get-recordings-dir", () => {
+		return getRecordingsDirInfo();
+	});
+
+	ipcMain.handle("choose-recordings-dir", async () => {
+		const dialogOptions = buildDialogOptions(
+			{
+				title: mainT("dialogs", "fileDialogs.selectRecordingsFolder"),
+				defaultPath: RECORDINGS_DIR,
+				properties: ["openDirectory", "createDirectory"] as Array<
+					"openDirectory" | "createDirectory"
+				>,
+			},
+			getMainWindow(),
+		);
+		const result = await dialog.showOpenDialog(dialogOptions);
+		if (result.canceled || result.filePaths.length === 0) {
+			return { success: false, canceled: true };
+		}
+		try {
+			const resolved = await setRecordingsDir(result.filePaths[0]);
+			return { success: true, path: resolved };
+		} catch (error) {
+			console.error("Failed to switch recordings folder:", error);
+			return {
+				success: false,
+				message: "Failed to switch recordings folder",
+				error: String(error),
+			};
+		}
+	});
+
+	ipcMain.handle("reset-recordings-dir", async () => {
+		try {
+			const resolved = await setRecordingsDir(null);
+			return { success: true, path: resolved };
+		} catch (error) {
+			console.error("Failed to reset recordings folder:", error);
+			return { success: false, message: "Failed to reset recordings folder", error: String(error) };
+		}
 	});
 
 	ipcMain.handle("request-camera-access", async () => {

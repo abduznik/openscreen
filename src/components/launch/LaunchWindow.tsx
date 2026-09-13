@@ -773,6 +773,12 @@ export function LaunchWindow() {
 			cameraUnavailable: t("webcam.unavailable"),
 			preview: t("deviceSettings.preview"),
 			previewUnavailable: t("deviceSettings.previewUnavailable"),
+			storage: t("deviceSettings.storage"),
+			storageHint: t("deviceSettings.storageHint"),
+			chooseFolder: t("deviceSettings.chooseFolder"),
+			resetToDefault: t("deviceSettings.resetToDefault"),
+			changingFolder: t("deviceSettings.changingFolder"),
+			changeFolderFailed: t("deviceSettings.changeFolderFailed"),
 		}),
 		[t],
 	);

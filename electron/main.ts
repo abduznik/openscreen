@@ -23,6 +23,7 @@ import {
 import { mainT, setMainLocale } from "./i18n";
 import { getSelectedDesktopSource, registerIpcHandlers } from "./ipc/handlers";
 import { installMainProcessErrorGuards } from "./main-process-errors";
+import { RecordingsLocationStore } from "./recording/recordingsLocationStore";
 import { registerSttIpc } from "./stt";
 import {
 	createCountdownOverlayWindow,
@@ -64,7 +65,14 @@ if (process.platform === "linux") {
 
 installMainProcessErrorGuards();
 
-export const RECORDINGS_DIR = path.join(app.getPath("userData"), "recordings");
+export const DEFAULT_RECORDINGS_DIR = path.join(app.getPath("userData"), "recordings");
+
+const recordingsLocationStore = new RecordingsLocationStore(app.getPath("userData"));
+
+// Mutable: reassigned by setRecordingsDir() when the user picks a custom
+// location in settings. `handlers.ts` imports this as a live named binding,
+// so every call site there sees the change immediately — no restart needed.
+export let RECORDINGS_DIR = recordingsLocationStore.getCustomDir() ?? DEFAULT_RECORDINGS_DIR;
 
 async function ensureRecordingsDir() {
 	try {
@@ -74,6 +82,23 @@ async function ensureRecordingsDir() {
 	} catch (error) {
 		console.error("Failed to create recordings directory:", error);
 	}
+}
+
+/**
+ * Switches where recordings are read from and written to, going forward.
+ * Pass `null` to reset to the default (userData/recordings). Does not move
+ * any existing files — the old location is left untouched.
+ */
+export async function setRecordingsDir(customDir: string | null): Promise<string> {
+	const resolved = customDir ? path.resolve(customDir) : DEFAULT_RECORDINGS_DIR;
+	await fs.mkdir(resolved, { recursive: true });
+	RECORDINGS_DIR = resolved;
+	await recordingsLocationStore.setCustomDir(customDir ? resolved : null);
+	return RECORDINGS_DIR;
+}
+
+export function getRecordingsDirInfo() {
+	return { path: RECORDINGS_DIR, isDefault: RECORDINGS_DIR === DEFAULT_RECORDINGS_DIR };
 }
 
 // The built directory structure
