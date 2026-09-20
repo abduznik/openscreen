@@ -426,6 +426,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 			{ success: true; path: string } | { success: false; message?: string }
 		>;
 	},
+	checkRecordingDiskSpace: () => {
+		return ipcRenderer.invoke("check-recording-disk-space") as Promise<
+			{ success: true } | { success: false; error: string }
+		>;
+	},
 	getShortcuts: () => {
 		return ipcRenderer.invoke("get-shortcuts");
 	},

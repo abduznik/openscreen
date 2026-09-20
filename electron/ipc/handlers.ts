@@ -230,7 +230,7 @@ function hasAllowedImportVideoExtension(filePath: string): boolean {
 async function lowDiskSpaceStartError(): Promise<{ success: false; error: string } | null> {
 	const status = await checkDiskSpace(RECORDINGS_DIR);
 	if (!status.low) return null;
-	const availableMb = Math.max(0, Math.round(status.availableBytes / (1024 * 1024)));
+	const availableMb = Math.max(0, Math.floor(status.availableBytes / (1024 * 1024)));
 	return {
 		success: false,
 		error: mainT("dialogs", "recording.lowDiskSpace", { availableMb }),
@@ -2119,6 +2119,11 @@ export function registerIpcHandlers(
 		return getRecordingsDirInfo();
 	});
 
+	ipcMain.handle("check-recording-disk-space", async () => {
+		const diskSpaceError = await lowDiskSpaceStartError();
+		return diskSpaceError ?? { success: true };
+	});
+
 	ipcMain.handle("choose-recordings-dir", async () => {
 		const dialogOptions = buildDialogOptions(
 			{
@@ -3556,7 +3561,12 @@ export function registerIpcHandlers(
 	// Declared here because both the webcam attach below and store-recorded-session
 	// finalize through the same registry.
 	const recordingStreams = new RecordingStreamRegistry();
-	registerRecordingStreamHandlers(ipcMain, recordingStreams, resolveRecordingOutputPath);
+	registerRecordingStreamHandlers(
+		ipcMain,
+		recordingStreams,
+		resolveRecordingOutputPath,
+		lowDiskSpaceStartError,
+	);
 
 	/**
 	 * Writes a browser-recorded webcam clip next to a natively-recorded screen

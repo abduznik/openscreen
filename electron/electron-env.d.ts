@@ -434,6 +434,7 @@ interface Window {
 		resetRecordingsDir: () => Promise<
 			{ success: true; path: string } | { success: false; message?: string }
 		>;
+		checkRecordingDiskSpace: () => Promise<{ success: true } | { success: false; error: string }>;
 		getShortcuts: () => Promise<Record<string, unknown> | null>;
 		saveShortcuts: (shortcuts: unknown) => Promise<{ success: boolean; error?: string }>;
 		updateGlobalShortcut: (binding: {
