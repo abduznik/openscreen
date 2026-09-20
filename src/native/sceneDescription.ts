@@ -17,7 +17,9 @@
 
 import type {
 	CameraFullscreenRegion,
+	Rotation3DPreset,
 	SpeedRegion,
+	WallpaperMotion,
 	WebcamBackgroundMode,
 } from "@/components/video-editor/types";
 import { DEFAULT_CROP_REGION, getZoomScale } from "@/components/video-editor/types";
@@ -52,12 +54,20 @@ import {
 	webcamSizeToFraction,
 } from "@/lib/compositeLayout";
 import { parseCssGradient, resolveLinearGradientAngle } from "@/lib/exporter/gradientParser";
+import type { FrameTheme, RecordingFrame } from "@/lib/projectDefaults";
 import type { CompositorClipInput } from "./contracts";
 
 /** Background behind the screen. Parsed from `settings.wallpaper`. */
 export type SceneBackground =
 	| { kind: "color"; color: string } // "#rrggbb"
-	| { kind: "gradient"; angleDeg: number; stops: string[] } // linear-gradient(deg, c1, c2, …)
+	// linear-gradient(deg, c1, c2, …). `motion` is omitted when still, so a project without
+	// animation sends the same payload as before the setting existed.
+	| {
+			kind: "gradient";
+			angleDeg: number;
+			stops: string[];
+			motion?: Exclude<WallpaperMotion, "none">;
+	  }
 	| { kind: "image"; path: string }; // "/wallpapers/…" or a data: URL
 
 /** A timeline zoom region (from `document.zoomRanges`). Times in seconds. */
@@ -73,8 +83,9 @@ export interface SceneZoomRegion {
 	focusY: number;
 	/** "auto" follows cursor telemetry instead of the fixed focus point. */
 	focusMode: "manual" | "auto" | null;
-	/** Optional rotation preset for the zoom. */
-	rotation: "iso" | "left" | "right" | null;
+	/** The zoom's 3D camera: a fixed angle or a moving camera (`regions.rs::camera_for`).
+	 *  `null` = flat; the native side also renders an unknown value flat. */
+	rotation: Rotation3DPreset | null;
 	/** Index of the clip (within `SceneDescription.clips`) whose source time this region's
 	 *  `startSec`/`endSec` are expressed in — disambiguates clips whose source windows
 	 *  numerically overlap (same or different asset). Unset only for a region that
@@ -87,9 +98,14 @@ export interface SceneZoomRegion {
 	 *  Native shows it when the playhead is parked on the cut and gates it HARD on its own
 	 *  span: no ease-in / ease-out window, and no chaining with a neighbouring zoom. That gate
 	 *  is what keeps the render cut — an export never composes a frame at those source times,
-	 *  and a transition envelope would otherwise reach the kept frames beside the cut.
-	 *  Omitted (not `false`) when there is no trim under the region. See issue #216. */
+	 *  and a transition envelope would otherwise reach the kept frames beside the cut. */
+	/** Omitted (not `false`) when there is no trim under the region. See issue #216. */
 	underTrim?: boolean;
+	/** When true, cursor is hidden during this zoom region. */
+	hideCursor?: boolean;
+	/** Each click presses the tilted plane toward the clicked side (`regions::click_impact`).
+	 *  Native ignores it without a `rotation`. Omitted (not `false`) when off. */
+	clickImpact?: true;
 }
 
 /** A "Full Camera" timeline region (from `legacyEditor.cameraFullscreenRegions`). Times in seconds. */
@@ -130,6 +146,11 @@ export interface SceneSpeedRegion {
  *  `layout.screenRect` as its container. And they are deliberately NOT affected by the zoom
  *  crop: the overlay is a sibling of the element carrying the zoom transform, so annotations
  *  hold still while the content zooms underneath them.
+ *
+ *  The exception is `kind: "blur"`: a privacy mask that held still would let the content it
+ *  hides slide out from under it. Native renders it on the content instead, through the zoom and
+ *  any 3D tilt (`FrameGeometry::privacy_mask`), so its rect names what it covers at rest. The
+ *  selection outline in the editor overlay still sits on the unzoomed rect.
  *
  *  `space: "frame"` opts an entry out of that and measures it against the output frame instead.
  *  Only captions set it: an annotation is authored on top of the visible video, so it must track
@@ -348,21 +369,47 @@ export interface SceneEffects {
 	 * wrong; the native side multiplies by whatever its reference measures right now.
 	 *
 	 * The slider itself stays in pixels for the user — the division happens here, once.
+	 *
+	 * Under a frame, the native side reads the slider's POSITION back from it (× the
+	 * output's short side ÷ `ROUNDNESS_SLIDER_MAX_PX`) and maps it onto the range that
+	 * frame wears well, in the frame's own unit — the same corner on every clip ratio.
 	 */
 	roundnessFrac: number;
 	/** 0..1 motion blur. */
 	motionBlur: number;
+	/**
+	 * The frame drawn around the recording. Omitted for "none", like `webcamEffect`: the
+	 * Rust side defaults the field (`SceneFrame::None`), and a scene without a frame then
+	 * serializes exactly as it did before the field existed.
+	 */
+	frame?: Exclude<RecordingFrame, "none">;
+	/**
+	 * Light or dark, for whichever frame is on — the window chrome and the three modelled
+	 * devices alike. Omitted at "light", the Rust default.
+	 */
+	frameTheme?: Exclude<FrameTheme, "light">;
+	/**
+	 * Defocus a 3D-tilted screen by its depth, sharp at the zoom focus. Inert on flat zooms:
+	 * the native side only reads it where it draws a tilted plane.
+	 */
+	depthOfField: boolean;
 }
 
 /** Cursor rendering, from the editor settings. */
 export interface SceneCursor {
 	show: boolean;
+	autoHide: boolean;
 	/** Direct scale (1 = default). */
 	size: number;
 	smoothing: number;
 	/** 0..1. */
 	motionBlur: number;
 	clickBounce: number;
+	/**
+	 * Modelled 3D arrow (`scene.rs` `SceneCursor::model3d`, compositor mode 15). Only drawn for
+	 * the default theme's arrow; any other cursor keeps its flat sprite.
+	 */
+	model3d: boolean;
 	clipToBounds: boolean;
 	/** Cursor theme id (sprite set). */
 	theme: string;
@@ -494,6 +541,23 @@ function parseWallpaper(wallpaper: string) {
 		} as const;
 	}
 	return { kind: "image", path: wallpaper } as const;
+}
+
+/**
+ * True when `settings.wallpaperMotion` has something to move: the compositor animates only
+ * the gradient it draws itself. The motion control asks this, not its own guess at what a
+ * gradient is, so it is enabled exactly when the export would show the motion.
+ */
+export function wallpaperAcceptsMotion(wallpaper: string): boolean {
+	return parseWallpaper(wallpaper).kind === "gradient";
+}
+
+/** The screen background with the chosen motion attached, when there is one to attach. */
+function sceneBackground(wallpaper: string, motion: WallpaperMotion): SceneBackground {
+	const background = parseWallpaper(wallpaper);
+	return background.kind === "gradient" && motion !== "none"
+		? { ...background, motion }
+		: background;
 }
 
 /**
@@ -1017,13 +1081,22 @@ export function buildSceneDescription(
 			roundnessFrac:
 				settings.borderRadius / Math.max(1, Math.min(outputDims.width, outputDims.height)),
 			motionBlur: settings.motionBlurAmount,
+			// Omitted at their defaults, like `webcamEffect`: the Rust side defaults both fields,
+			// so a project with no frame serializes exactly as it did before they existed.
+			...(settings.frame !== "none" ? { frame: settings.frame } : {}),
+			...(settings.frame !== "none" && settings.frameTheme !== "light"
+				? { frameTheme: settings.frameTheme }
+				: {}),
+			depthOfField: settings.depthOfField,
 		},
 		cursor: {
 			show: settings.cursorShow,
+			autoHide: settings.cursorAutoHide,
 			size: settings.cursor.size,
 			smoothing: settings.cursor.smoothing,
 			motionBlur: settings.cursor.motionBlur,
 			clickBounce: settings.cursor.clickBounce,
+			model3d: settings.cursor.model3d,
 			clipToBounds: settings.cursor.clipToBounds,
 			theme: settings.cursorTheme,
 		},
@@ -1031,7 +1104,7 @@ export function buildSceneDescription(
 			gainDb: settings.audioGainDb,
 		},
 		audioTracks,
-		background: parseWallpaper(settings.wallpaper),
+		background: sceneBackground(settings.wallpaper, settings.wallpaperMotion),
 		zoomRegions: projectedZoomRegions.map((region) => ({
 			id: region.id,
 			startSec: region.startMs / 1000,
@@ -1061,6 +1134,8 @@ export function buildSceneDescription(
 			rotation: region.rotationPreset ?? null,
 			clipIndex: region.clipIndex,
 			...(region.underTrim ? { underTrim: true } : {}),
+			...(region.hideCursor ? { hideCursor: true } : {}),
+			...(region.clickImpact ? { clickImpact: true as const } : {}),
 		})),
 		annotations: projectedAnnotations
 			.map((region) => {

@@ -1,5 +1,11 @@
 {
 	"background": {
+		"motion": "動畫",
+		"motionNone": "無",
+		"motionDrift": "漂移",
+		"motionAurora": "極光",
+		"motionWaves": "波浪",
+		"motionGradientOnly": "動畫僅適用於漸層背景。請選擇一個漸層來啟用動畫。",
 		"gradientLabel": "漸層 {{index}}",
 		"uploadCustom": "上傳自訂",
 		"unsupportedImage": "不支援的圖片格式。請使用 JPG 或 PNG 檔案。",
@@ -108,7 +114,47 @@
 		"format": "格式",
 		"fitClip": "符合",
 		"motionBlur": "動態模糊",
-		"roundness": "圓角"
+		"depthOfField": "景深",
+		"depthOfFieldHint": "3D 縮放",
+		"depthOfFieldNoTilt": "此專案沒有 3D 縮放",
+		"roundness": "圓角",
+		"frameStyle": "樣式",
+		"windowNone": "無",
+		"frameWindow": "視窗",
+		"frameLaptop": "筆記型電腦",
+		"framePhone": "手機",
+		"frameScreen": "螢幕",
+		"frameTheme": "主題",
+		"frameThemeLight": "淺色",
+		"frameThemeDark": "深色",
+		"frameThemeHelp": "銀色機身配淺色邊框，或石墨色配深色邊框。適用於所有邊框。",
+		"windowHelp": "在錄製內容周圍繪製視窗，或以 3D 建模的裝置。",
+		"roundnessFrameHelp": "範圍隨外框而定：100% 是該外框仍然好看的最大圓角。"
+	},
+	"stylePresets": {
+		"button": "預設",
+		"menuLabel": "樣式預設",
+		"factoryName": "OpenScreen",
+		"factoryBadge": "內建",
+		"empty": "尚無已儲存的預設",
+		"create": "建立新預設…",
+		"namePlaceholder": "預設名稱",
+		"save": "儲存",
+		"moreActions": "{{name}} 的更多動作",
+		"revealMac": "在 Finder 中顯示",
+		"revealWindows": "在檔案總管中顯示",
+		"revealLinux": "在資料夾中顯示",
+		"rename": "重新命名",
+		"update": "從目前專案更新",
+		"delete": "刪除",
+		"confirmDelete": "要刪除「{{name}}」嗎？",
+		"applied": "已套用「{{name}}」",
+		"saved": "預設已儲存",
+		"updated": "預設已更新",
+		"nameRequired": "請輸入名稱",
+		"nameTaken": "已有同名的預設",
+		"loadFailed": "無法載入預設",
+		"saveFailed": "無法儲存預設：{{error}}"
 	},
 	"transcript": {
 		"laneRecording": "錄影",
@@ -298,19 +344,42 @@
 			"autoDescription": "攝影機跟隨錄製時的游標位置",
 			"title": "對焦模式"
 		},
-		"threeD": {
+		"camera": {
+			"title": "3D 鏡頭",
+			"off": "關閉",
+			"fixed": "固定角度",
+			"moving": "運動鏡頭",
 			"preset": {
-				"left": "左",
-				"right": "右",
-				"iso": "Iso"
+				"iso": "斜上方俯視",
+				"left": "畫面向左轉",
+				"right": "畫面向右轉",
+				"followCursor": "隨游標環繞"
 			},
-			"none": "無",
-			"title": "3D 旋轉"
+			"description": {
+				"off": "畫面保持平整。",
+				"iso": "保持單一姿態：向左轉，並從上方俯視。",
+				"left": "保持單一姿態：畫面朝向左側，右邊緣向前。",
+				"right": "保持單一姿態：畫面朝向右側，左邊緣向前。",
+				"followCursor": "螢幕保持不動，鏡頭繞著螢幕轉到游標所在的一側，並隨游標升降。"
+			},
+			"needsCursor": "游標已隱藏：此鏡頭沒有可跟隨的對象，維持初始角度。"
+		},
+		"clickImpact": {
+			"title": "點擊按壓",
+			"description": "每次點擊都會按壓傾斜的畫面：被點擊的一側下沉，然後彈回。",
+			"needsRotation": "請先選擇 3D 鏡頭：只有傾斜的畫面才能被按壓。",
+			"needsCursor": "游標已隱藏：畫面只對看得見的點擊做出反應。",
+			"descriptionCamera": "每次點擊，鏡頭都會稍微後退，然後回位。"
 		},
 		"level": "縮放級別",
 		"previewHold": "按住預覽放大效果",
 		"customScale": "自訂縮放",
-		"selectRegion": "選擇要調整的縮放區域"
+		"selectRegion": "選擇要調整的縮放區域",
+		"cursor": {
+			"title": "游標",
+			"show": "顯示",
+			"hide": "隱藏"
+		}
 	},
 	"audio": {
 		"outputGain": "輸出音量",
@@ -334,6 +403,9 @@
 	"cursor": {
 		"smoothing": "平滑",
 		"clickBounce": "點擊彈跳",
+		"model3d": "3D 游標",
+		"model3dHint": "預設樣式：所有游標形狀都會變成 3D。其他樣式維持平面。",
+		"model3dNeedsCursor": "開啟「顯示游標」後才能使用 3D 游標。",
 		"help": "根據錄製的遙測資料繪製游標：主題、大小、平滑、動態模糊與點擊回彈。",
 		"clipToBoundsDescription": "讓游標保持在影片畫面內。關閉後游標可超出邊緣——在縮放或平移時很有用。",
 		"size": "大小",
@@ -342,7 +414,8 @@
 		"themeDefault": "預設",
 		"clipToBounds": "裁切至畫布",
 		"motionBlur": "動態模糊",
-		"theme": "游標樣式"
+		"theme": "游標樣式",
+		"autoHide": "閒置時隱藏"
 	},
 	"export": {
 		"gifButton": "匯出 GIF",

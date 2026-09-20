@@ -51,9 +51,14 @@ interface Window {
 			opened: boolean;
 			reason?: string;
 		}>;
-		selectSource: (source: ProcessedDesktopSource) => Promise<ProcessedDesktopSource | null>;
+		selectSource: (
+			source: ProcessedDesktopSource,
+			options?: { persist?: boolean },
+		) => Promise<ProcessedDesktopSource | null>;
 		getSelectedSource: () => Promise<ProcessedDesktopSource | null>;
-		onSelectedSourceChanged: (callback: (source: ProcessedDesktopSource) => void) => () => void;
+		onSelectedSourceChanged: (
+			callback: (source: ProcessedDesktopSource | null) => void,
+		) => () => void;
 		getRecordingPrefs: () => Promise<import("./ipc/handlers").RecordingPrefs>;
 		setRecordingPrefs: (
 			prefs: Partial<import("./ipc/handlers").RecordingPrefs>,
@@ -179,6 +184,10 @@ interface Window {
 			session?: import("../src/lib/recordingSession").RecordingSession;
 			message?: string;
 			discarded?: boolean;
+			/** The take ended before it was stopped, but its recording was kept. */
+			warning?: string;
+			/** The stop failed and the recording was recovered from what was on disk. */
+			recovered?: boolean;
 			error?: string;
 		}>;
 		attachNativeMacWebcamRecording: (payload: {
@@ -317,6 +326,8 @@ interface Window {
 			success: boolean;
 			session?: RecordingSession | null;
 			canceled?: boolean;
+			/** Why this recording ended before it was stopped, when it did. */
+			warning?: string;
 		}>;
 		findRecordingCamera: (videoPath: string) => Promise<{
 			success: boolean;
@@ -442,7 +453,21 @@ interface Window {
 		/** Total pointer travel since `beginHudOverlayDrag`, not a per-frame delta. */
 		dragHudOverlayTo: (deltaX: number, deltaY: number) => void;
 		endHudOverlayDrag: () => void;
-		setHudOverlaySize: (width: number, height: number) => void;
+		/** Resizes the overlay and reports the visible stack's rect inside the requested
+		 *  size (window-relative); positioning decisions are made on that rect. */
+		setHudOverlaySize: (
+			width: number,
+			height: number,
+			content: { x: number; y: number; width: number; height: number },
+		) => void;
+		/** The visible stack's rect changed without a resize (a popover opened, the bar
+		 *  grew into its reserve); the overlay is re-clamped by it. */
+		setHudOverlayContent: (content: {
+			x: number;
+			y: number;
+			width: number;
+			height: number;
+		}) => void;
 		showCountdownOverlay: (value: number, runId: number) => Promise<void>;
 		setCountdownOverlayValue: (value: number, runId: number) => Promise<void>;
 		hideCountdownOverlay: (runId: number) => Promise<void>;

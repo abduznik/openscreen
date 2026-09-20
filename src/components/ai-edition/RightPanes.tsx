@@ -43,6 +43,7 @@ import { toast } from "sonner";
 import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
 import GradientEditor, { type GradientEditorState } from "@/components/ui/gradient-editor";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { WALLPAPER_MOTIONS, type WallpaperMotion } from "@/components/video-editor/types";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { resolveCaptionLane } from "@/lib/ai-edition/captions/settings";
 import { collapseTracksToPills, trackGroupId } from "@/lib/ai-edition/document/audioTracks";
@@ -94,12 +95,20 @@ import {
 } from "@/lib/cursor/cursorThemes";
 import { buildGradientFromEditor } from "@/lib/gradientBuilder";
 import {
+	FRAME_THEMES,
+	type FrameTheme,
+	RECORDING_FRAMES,
+	type RecordingFrame,
+} from "@/lib/projectDefaults";
+import {
 	classifyWallpaper,
 	resolveImageWallpaperUrl,
 	WALLPAPER_PATHS,
 	WALLPAPER_THUMB_PATHS,
 } from "@/lib/wallpaper";
 import { isNativeCompositorActive, setNativeParam } from "@/native";
+import { ROUNDNESS_SLIDER_MAX_PX } from "@/native/paramUnits";
+import { wallpaperAcceptsMotion } from "@/native/sceneDescription";
 import {
 	ASPECT_RATIO_PRESETS,
 	type AspectRatio,
@@ -323,6 +332,13 @@ function useWallpaperFileInput(onPicked: (dataUrl: string) => void): {
 	};
 }
 
+const WALLPAPER_MOTION_LABEL_KEYS: Record<WallpaperMotion, string> = {
+	none: "background.motionNone",
+	drift: "background.motionDrift",
+	aurora: "background.motionAurora",
+	waves: "background.motionWaves",
+};
+
 // Wallpaper picker — image / solid color / gradient tabs.
 //
 // Wallpapers round-trip through the legacyEditor envelope exactly as they did
@@ -336,6 +352,7 @@ function BackgroundSection() {
 	const { pick: handlePickFile, input: fileInput } = useWallpaperFileInput((dataUrl) =>
 		set({ wallpaper: dataUrl }),
 	);
+	const motionApplies = wallpaperAcceptsMotion(settings.wallpaper);
 
 	return (
 		<>
@@ -390,6 +407,38 @@ function BackgroundSection() {
 			    which closes the popover and would unmount the input mid-pick, dropping the
 			    file. It has no layout to cost us here. */}
 			{fileInput}
+			{/* Beside the picker because it moves what the picker chose. Only the compositor's own
+			    gradient can move; on anything else the control says so instead of holding a
+			    choice that changes nothing on screen. The stored choice is kept and comes back
+			    with the next gradient. */}
+			<div className={styles.field}>
+				<label htmlFor="background-motion">{ts("background.motion")}</label>
+				<select
+					id="background-motion"
+					value={motionApplies ? settings.wallpaperMotion : "none"}
+					disabled={!hasDocument || !motionApplies}
+					title={motionApplies ? undefined : ts("background.motionGradientOnly")}
+					onChange={(e) => void set({ wallpaperMotion: e.target.value as WallpaperMotion })}
+				>
+					{WALLPAPER_MOTIONS.map((motion) => (
+						<option key={motion} value={motion}>
+							{ts(WALLPAPER_MOTION_LABEL_KEYS[motion])}
+						</option>
+					))}
+				</select>
+			</div>
+			{motionApplies ? null : (
+				<p
+					style={{
+						margin: 0,
+						padding: "0 var(--sp-4) 8px",
+						font: "400 var(--fs-app-sm) var(--font-body)",
+						color: "var(--muted)",
+					}}
+				>
+					{ts("background.motionGradientOnly")}
+				</p>
+			)}
 			{/* Reads in the order it acts: pick a background, then blur it. Lived under
 			    "Effects" while that was a separate facet, which is how a control named
 			    "Blur BG" ended up in the tab that doesn't say background. */}
@@ -2333,6 +2382,20 @@ function pluralKey(locale: string, count: number): string {
 
 // ─── Video Effects ─────────────────────────────────────────────────
 
+const RECORDING_FRAME_LABEL_KEYS: Record<RecordingFrame, string> = {
+	none: "effects.windowNone",
+	window: "effects.frameWindow",
+	laptop: "effects.frameLaptop",
+	phone: "effects.framePhone",
+	// "Screen" is what a user calls a desktop monitor; `monitor` is what the object is.
+	monitor: "effects.frameScreen",
+};
+
+const FRAME_THEME_LABEL_KEYS: Record<FrameTheme, string> = {
+	light: "effects.frameThemeLight",
+	dark: "effects.frameThemeDark",
+};
+
 /**
  * One pane for everything that shapes the composition.
  *
@@ -2355,8 +2418,11 @@ export function VideoEffectsPane() {
 	// can never disagree about what shape the footage is. Already sorted by clip count then by
 	// pixel area, so [0] is "the shape most of this timeline is in" with no heuristic of ours.
 	const nativeFormats = useMemo(() => (document ? collectNativeFormats(document) : []), [document]);
+	const hasTiltedZoom = (document?.zoomRanges ?? []).some((z) => z.rotationPreset != null);
 	const [fitMenuOpen, setFitMenuOpen] = useState(false);
 	const [ratioMenuOpen, setRatioMenuOpen] = useState(false);
+	const [frameMenuOpen, setFrameMenuOpen] = useState(false);
+	const [themeMenuOpen, setThemeMenuOpen] = useState(false);
 	const { locale } = useI18n();
 	const clipCountLabel = (count: number) => ts(pluralKey(locale, count), { count });
 
@@ -2364,6 +2430,9 @@ export function VideoEffectsPane() {
 	// valeur px de l'UI par ce même rayon de base fait que le coin natif ≈ les px affichés
 	// (au lieu de plafonner à ~24px comme avec /64).
 	const NATIVE_SCREEN_BASE_RADIUS_PX = 24;
+	// Sous un cadre, Roundness se lit en % de la course propre au cadre (cf. le slider).
+	const framed = settings.frame !== "none";
+	const roundnessScale = framed ? 100 / ROUNDNESS_SLIDER_MAX_PX : 1;
 	// La synchro initiale de ces params vit dans NativeCompositorOverlay
 	// (`pushAllNativeParams`) : l'inspecteur n'affiche qu'un panneau a la fois, donc
 	// un effet de montage ici ne poussait rien tant que ce panneau precis n'avait pas
@@ -2541,6 +2610,109 @@ export function VideoEffectsPane() {
 					</PopoverContent>
 				</Popover>
 			</div>
+			{/* The frame drawn around the recording, and its theme. Two menus like Format above
+			    them, and for the same reason: each picks one project-wide look among a few. With a
+			    frame on, Roundness rounds the footage within that frame's own range, the body
+			    following concentric, and Shadow falls under the frame — both still move what
+			    they name. */}
+			<div className={styles.paneRow}>
+				<span className={styles.label} title={ts("effects.windowHelp")}>
+					{ts("effects.frameStyle")}
+				</span>
+				<Popover open={frameMenuOpen} onOpenChange={setFrameMenuOpen}>
+					<PopoverTrigger asChild>
+						<button
+							type="button"
+							className={styles.rowAction}
+							disabled={!hasDocument}
+							aria-label={ts("effects.frameStyle")}
+							title={ts("effects.windowHelp")}
+						>
+							{ts(RECORDING_FRAME_LABEL_KEYS[settings.frame])}
+							<ChevronDown size={11} />
+						</button>
+					</PopoverTrigger>
+					<PopoverContent
+						align="end"
+						sideOffset={6}
+						collisionPadding={12}
+						animated={false}
+						className="w-auto border-0 bg-transparent p-0 shadow-none"
+					>
+						<div className={styles.actionMenu} role="menu" aria-label={ts("effects.frameStyle")}>
+							{RECORDING_FRAMES.map((frame) => (
+								<button
+									type="button"
+									role="menuitem"
+									key={frame}
+									className={`${styles.actionMenuRow}${
+										frame === settings.frame ? ` ${styles.isActive}` : ""
+									}`}
+									onClick={() => {
+										setFrameMenuOpen(false);
+										void set({ frame });
+									}}
+								>
+									<span className={styles.actionMenuMain}>
+										{ts(RECORDING_FRAME_LABEL_KEYS[frame])}
+									</span>
+								</button>
+							))}
+						</div>
+					</PopoverContent>
+				</Popover>
+			</div>
+			{/* The theme rides WITH the frame: it only exists once there is a body to colour, so it
+			    appears next to the frame it recolours rather than sitting there inert. */}
+			{settings.frame !== "none" ? (
+				<div className={styles.paneRow}>
+					<span className={styles.label} title={ts("effects.frameThemeHelp")}>
+						{ts("effects.frameTheme")}
+					</span>
+					<Popover open={themeMenuOpen} onOpenChange={setThemeMenuOpen}>
+						<PopoverTrigger asChild>
+							<button
+								type="button"
+								className={styles.rowAction}
+								disabled={!hasDocument}
+								aria-label={ts("effects.frameTheme")}
+								title={ts("effects.frameThemeHelp")}
+							>
+								{ts(FRAME_THEME_LABEL_KEYS[settings.frameTheme])}
+								<ChevronDown size={11} />
+							</button>
+						</PopoverTrigger>
+						<PopoverContent
+							align="end"
+							sideOffset={6}
+							collisionPadding={12}
+							animated={false}
+							className="w-auto border-0 bg-transparent p-0 shadow-none"
+						>
+							<div className={styles.actionMenu} role="menu" aria-label={ts("effects.frameTheme")}>
+								{FRAME_THEMES.map((frameTheme) => (
+									<button
+										type="button"
+										role="menuitem"
+										key={frameTheme}
+										className={`${styles.actionMenuRow}${
+											frameTheme === settings.frameTheme ? ` ${styles.isActive}` : ""
+										}`}
+										onClick={() => {
+											setThemeMenuOpen(false);
+											void set({ frameTheme });
+										}}
+									>
+										<span className={styles.actionMenuMain}>
+											{ts(FRAME_THEME_LABEL_KEYS[frameTheme])}
+										</span>
+									</button>
+								))}
+							</div>
+						</PopoverContent>
+					</Popover>
+				</div>
+			) : null}
 			<div className={styles.sliderGrid}>
 				<SliderCell
 					label={ts("effects.shadow")}
@@ -2557,18 +2729,23 @@ export function VideoEffectsPane() {
 					}}
 					onCommit={() => void commit()}
 				/>
+				{/* Under a frame the slider spans 0 → the most that frame wears well (the native
+				    `frame_roundness_cap`), so its travel reads as a share of that range, not as
+				    pixels it no longer draws. The stored value stays in pixels either way. */}
 				<SliderCell
 					label={ts("effects.roundness")}
-					value={settings.borderRadius}
+					hint={framed ? ts("effects.roundnessFrameHelp") : undefined}
+					value={settings.borderRadius * roundnessScale}
 					min={0}
-					max={64}
-					step={0.5}
-					suffix="px"
+					max={ROUNDNESS_SLIDER_MAX_PX * roundnessScale}
+					step={framed ? 1 : 0.5}
+					suffix={framed ? "%" : "px"}
 					disabled={!hasDocument}
 					onChange={(v) => {
-						setLive({ borderRadius: v });
+						const px = v / roundnessScale;
+						setLive({ borderRadius: px });
 						if (isNativeCompositorActive()) {
-							setNativeParam("roundness", v / NATIVE_SCREEN_BASE_RADIUS_PX);
+							setNativeParam("roundness", px / NATIVE_SCREEN_BASE_RADIUS_PX);
 						}
 					}}
 					onCommit={() => void commit()}
@@ -2611,11 +2788,28 @@ export function VideoEffectsPane() {
 					onCommit={() => void commit()}
 				/>
 			</div>
+			{/* Next to motion blur because it is the other blur of the RECORDING. It only ever
+			    acts on a 3D-tilted zoom, so with none in the project the switch would move
+			    nothing on screen: it is disabled then, and the row says why. */}
+			<div className={styles.paneRow}>
+				<span className={styles.label}>
+					{ts("effects.depthOfField")}
+					<span className={styles.info}>
+						{hasTiltedZoom ? ts("effects.depthOfFieldHint") : ts("effects.depthOfFieldNoTilt")}
+					</span>
+				</span>
+				<Toggle
+					checked={settings.depthOfField}
+					ariaLabel={ts("effects.depthOfField")}
+					disabled={!hasDocument || !hasTiltedZoom}
+					onChange={(v) => void set({ depthOfField: v })}
+				/>
+			</div>
 		</Pane>
 	);
 }
 
-// ─── Layout (webcam) ──────────────────────────────────────────────
+// ─── Layout (webcam)──────────────────────────────────────────────
 
 const WEBCAM_PRESETS = [
 	{ value: "picture-in-picture", labelKey: "layout.pictureInPicture" },
@@ -3300,6 +3494,7 @@ export function CursorPane() {
 			<div className={styles.paneRow}>
 				<span className={styles.label}>{ts("cursor.show")}</span>
 				<Toggle
+					ariaLabel={ts("cursor.show")}
 					checked={settings.cursorShow}
 					disabled={!hasDocument}
 					onChange={(v) => {
@@ -3311,11 +3506,50 @@ export function CursorPane() {
 				/>
 			</div>
 			<div className={styles.paneRow}>
+				<span className={styles.label}>{ts("cursor.autoHide")}</span>
+				<Toggle
+					ariaLabel={ts("cursor.autoHide")}
+					checked={settings.cursorAutoHide}
+					disabled={!hasDocument || !settings.cursorShow}
+					onChange={(v) => {
+						void set({ cursorAutoHide: v });
+						if (isNativeCompositorActive()) {
+							setNativeParam("cursorAutoHide", v);
+						}
+					}}
+				/>
+			</div>
+			<div className={styles.paneRow}>
 				<span className={styles.label}>{ts("cursor.clipToBounds")}</span>
 				<Toggle
+					ariaLabel={ts("cursor.clipToBounds")}
 					checked={settings.cursor.clipToBounds}
 					disabled={!hasDocument}
 					onChange={(v) => void set({ cursor: { clipToBounds: v } })}
+				/>
+			</div>
+			{/* One switch for the modelled cursor. A hidden cursor has nothing to model, so the
+			    row is disabled then and both its hint and its tooltip say why. */}
+			<div
+				className={styles.paneRow}
+				title={settings.cursorShow ? undefined : ts("cursor.model3dNeedsCursor")}
+			>
+				<span className={styles.label}>
+					{ts("cursor.model3d")}
+					<span className={styles.info}>
+						{settings.cursorShow ? ts("cursor.model3dHint") : ts("cursor.model3dNeedsCursor")}
+					</span>
+				</span>
+				<Toggle
+					ariaLabel={ts("cursor.model3d")}
+					checked={settings.cursor.model3d}
+					disabled={!hasDocument || !settings.cursorShow}
+					onChange={(v) => {
+						void set({ cursor: { model3d: v } });
+						if (isNativeCompositorActive()) {
+							setNativeParam("cursorModel3d", v);
+						}
+					}}
 				/>
 			</div>
 			<div className={styles.sectionLabel}>{ts("cursor.theme")}</div>
@@ -3472,6 +3706,7 @@ export function SliderCell({
 	onCommit,
 	showValue = true,
 	full = false,
+	hint,
 }: {
 	label: string;
 	value: number;
@@ -3487,12 +3722,17 @@ export function SliderCell({
 	 *  l'interpolent), sans quoi elle s'affiche deux fois. */
 	showValue?: boolean;
 	full?: boolean;
+	/** Une phrase qui dit ce que la course du slider signifie quand ce n'est pas l'évidence
+	 *  (Roundness sous un cadre) : l'infobulle du libellé et du slider. */
+	hint?: string;
 }) {
 	const pct = Math.max(0, Math.min(100, max > min ? ((value - min) / (max - min)) * 100 : 0));
 	return (
 		<div className={`${styles.sliderCell}${full ? ` ${styles.full}` : ""}`}>
 			<div className={styles.head}>
-				<span className={styles.label}>{label}</span>
+				<span className={styles.label} title={hint}>
+					{label}
+				</span>
 				{showValue ? (
 					<span className={styles.val}>
 						{value.toFixed(decimals)}
@@ -3512,6 +3752,7 @@ export function SliderCell({
 				step={step}
 				value={value}
 				disabled={disabled}
+				title={hint}
 				style={{ "--slider-pct": `${pct}%` } as CSSProperties}
 				onChange={(e) => onChange(Number(e.target.value))}
 				onMouseUp={onCommit}

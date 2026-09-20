@@ -1,5 +1,11 @@
 {
 	"background": {
+		"motion": "Animation",
+		"motionNone": "None",
+		"motionDrift": "Drift",
+		"motionAurora": "Aurora",
+		"motionWaves": "Waves",
+		"motionGradientOnly": "Animation applies to gradient backgrounds only. Pick a gradient to animate it.",
 		"gradientLabel": "Gradient {{index}}",
 		"uploadCustom": "Upload Custom",
 		"unsupportedImage": "Unsupported image. Use a JPG or PNG file.",
@@ -108,7 +114,47 @@
 		"format": "Format",
 		"fitClip": "Fit",
 		"motionBlur": "Motion Blur",
-		"roundness": "Roundness"
+		"depthOfField": "Depth of field",
+		"depthOfFieldHint": "3D zooms",
+		"depthOfFieldNoTilt": "No 3D zoom in this project",
+		"roundness": "Roundness",
+		"frameStyle": "Style",
+		"windowNone": "None",
+		"frameWindow": "Window",
+		"frameLaptop": "Laptop",
+		"framePhone": "Phone",
+		"frameScreen": "Screen",
+		"frameTheme": "Theme",
+		"frameThemeLight": "Light",
+		"frameThemeDark": "Dark",
+		"frameThemeHelp": "Silver body and light chrome, or graphite and dark. Applies to every frame.",
+		"windowHelp": "Draws a window, or a device modelled in 3D, around the recording.",
+		"roundnessFrameHelp": "The range adapts to the frame: 100% is its roundest good look."
+	},
+	"stylePresets": {
+		"button": "Presets",
+		"menuLabel": "Style presets",
+		"factoryName": "OpenScreen",
+		"factoryBadge": "Built-in",
+		"empty": "No saved presets yet",
+		"create": "Create new preset…",
+		"namePlaceholder": "Preset name",
+		"save": "Save",
+		"moreActions": "More actions for {{name}}",
+		"revealMac": "Show in Finder",
+		"revealWindows": "Show in Explorer",
+		"revealLinux": "Show in folder",
+		"rename": "Rename",
+		"update": "Update from current project",
+		"delete": "Delete",
+		"confirmDelete": "Delete “{{name}}”?",
+		"applied": "Applied “{{name}}”",
+		"saved": "Preset saved",
+		"updated": "Preset updated",
+		"nameRequired": "Enter a name",
+		"nameTaken": "A preset with this name already exists",
+		"loadFailed": "Could not load presets",
+		"saveFailed": "Could not save the preset: {{error}}"
 	},
 	"transcript": {
 		"laneRecording": "Recording",
@@ -298,19 +344,42 @@
 			"autoDescription": "Camera follows the recorded cursor position",
 			"title": "Focus Mode"
 		},
-		"threeD": {
+		"camera": {
+			"title": "3D camera",
+			"off": "Off",
+			"fixed": "Fixed angle",
+			"moving": "Moving camera",
 			"preset": {
-				"left": "Left",
-				"right": "Right",
-				"iso": "Iso"
+				"iso": "Angled from above",
+				"left": "Screen turned left",
+				"right": "Screen turned right",
+				"followCursor": "Orbits with the cursor"
 			},
-			"none": "None",
-			"title": "3D Rotation"
+			"description": {
+				"off": "The screen stays flat.",
+				"iso": "Holds one pose: turned left and seen from above.",
+				"left": "Holds one pose: the screen faces left, its right edge comes forward.",
+				"right": "Holds one pose: the screen faces right, its left edge comes forward.",
+				"followCursor": "The screen stays still; the camera circles it, swinging to the cursor's side and rising or dipping with it."
+			},
+			"needsCursor": "The cursor is hidden: this camera has nothing to follow and holds its starting angle."
+		},
+		"clickImpact": {
+			"title": "Click impact",
+			"description": "Each click presses the tilted screen: the clicked side dips, then springs back.",
+			"needsRotation": "Pick a 3D camera first: only a tilted screen can be pressed.",
+			"needsCursor": "The cursor is hidden: the screen only reacts to clicks you can see.",
+			"descriptionCamera": "Each click pushes the camera back a little, then it springs forward."
 		},
 		"level": "Zoom Level",
 		"previewHold": "Hold to preview zoom effect",
 		"customScale": "Custom Zoom",
-		"selectRegion": "Select a zoom region to adjust"
+		"selectRegion": "Select a zoom region to adjust",
+		"cursor": {
+			"title": "Cursor",
+			"show": "Visible",
+			"hide": "Hidden"
+		}
 	},
 	"audio": {
 		"outputGain": "Output level",
@@ -334,6 +403,9 @@
 	"cursor": {
 		"smoothing": "Smoothing",
 		"clickBounce": "Click Bounce",
+		"model3d": "3D cursor",
+		"model3dHint": "Default style: every cursor shape turns 3D. Other styles stay flat.",
+		"model3dNeedsCursor": "Turn on Show Cursor to use the 3D cursor.",
 		"help": "Cursor rendering from the recorded telemetry: theme, size, smoothing, motion blur, and click-bounce emphasis.",
 		"clipToBoundsDescription": "Keeps the cursor inside the video frame. Turn off to let the cursor extend past the edges - useful when zoomed in or panned.",
 		"size": "Size",
@@ -342,7 +414,8 @@
 		"themeDefault": "Default",
 		"clipToBounds": "Clip to Canvas",
 		"motionBlur": "Motion Blur",
-		"theme": "Cursor Style"
+		"theme": "Cursor Style",
+		"autoHide": "Auto-hide when inactive"
 	},
 	"export": {
 		"gifButton": "Export GIF",

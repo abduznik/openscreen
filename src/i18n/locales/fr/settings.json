@@ -1,5 +1,11 @@
 {
 	"background": {
+		"motion": "Animation",
+		"motionNone": "Aucun",
+		"motionDrift": "Dérive",
+		"motionAurora": "Aurore",
+		"motionWaves": "Vagues",
+		"motionGradientOnly": "L'animation ne s'applique qu'aux fonds dégradés. Choisissez un dégradé pour l'animer.",
 		"gradientLabel": "Dégradé {{index}}",
 		"uploadCustom": "Téléverser une image",
 		"unsupportedImage": "Image non prise en charge. Utilisez un fichier JPG ou PNG.",
@@ -108,7 +114,47 @@
 		"format": "Format",
 		"fitClip": "Ajuster",
 		"motionBlur": "Flou de mouvement",
-		"roundness": "Arrondi"
+		"depthOfField": "Profondeur de champ",
+		"depthOfFieldHint": "Zooms 3D",
+		"depthOfFieldNoTilt": "Aucun zoom 3D dans ce projet",
+		"roundness": "Arrondi",
+		"frameStyle": "Style",
+		"windowNone": "Aucune",
+		"frameWindow": "Fenêtre",
+		"frameLaptop": "Portable",
+		"framePhone": "Téléphone",
+		"frameScreen": "Écran",
+		"frameTheme": "Thème",
+		"frameThemeLight": "Clair",
+		"frameThemeDark": "Sombre",
+		"frameThemeHelp": "Coque argent et chrome clair, ou graphite et sombre. Vaut pour tous les cadres.",
+		"windowHelp": "Dessine une fenêtre, ou un appareil modelé en 3D, autour de l'enregistrement.",
+		"roundnessFrameHelp": "La course s'adapte au cadre : 100 % est son arrondi le plus prononcé qui reste beau."
+	},
+	"stylePresets": {
+		"button": "Préréglages",
+		"menuLabel": "Préréglages de style",
+		"factoryName": "OpenScreen",
+		"factoryBadge": "Intégré",
+		"empty": "Aucun préréglage enregistré",
+		"create": "Créer un préréglage…",
+		"namePlaceholder": "Nom du préréglage",
+		"save": "Enregistrer",
+		"moreActions": "Plus d’actions pour {{name}}",
+		"revealMac": "Afficher dans le Finder",
+		"revealWindows": "Afficher dans l’Explorateur",
+		"revealLinux": "Afficher dans le dossier",
+		"rename": "Renommer",
+		"update": "Mettre à jour depuis le projet actuel",
+		"delete": "Supprimer",
+		"confirmDelete": "Supprimer « {{name}} » ?",
+		"applied": "« {{name}} » appliqué",
+		"saved": "Préréglage enregistré",
+		"updated": "Préréglage mis à jour",
+		"nameRequired": "Saisissez un nom",
+		"nameTaken": "Un préréglage portant ce nom existe déjà",
+		"loadFailed": "Impossible de charger les préréglages",
+		"saveFailed": "Impossible d’enregistrer le préréglage : {{error}}"
 	},
 	"transcript": {
 		"laneRecording": "Enregistrement",
@@ -298,19 +344,42 @@
 			"autoDescription": "La caméra suit la position du curseur enregistré",
 			"title": "Mode focus"
 		},
-		"threeD": {
+		"camera": {
+			"title": "Caméra 3D",
+			"off": "Désactivée",
+			"fixed": "Angle fixe",
+			"moving": "Caméra mobile",
 			"preset": {
-				"left": "Gauche",
-				"right": "Droite",
-				"iso": "Iso"
+				"iso": "Plongée de biais",
+				"left": "Écran tourné à gauche",
+				"right": "Écran tourné à droite",
+				"followCursor": "Tourne avec le curseur"
 			},
-			"none": "Aucune",
-			"title": "Rotation 3D"
+			"description": {
+				"off": "L'écran reste à plat.",
+				"iso": "Garde une seule pose : tourné vers la gauche et vu d'en haut.",
+				"left": "Garde une seule pose : l'écran regarde vers la gauche, son bord droit avance.",
+				"right": "Garde une seule pose : l'écran regarde vers la droite, son bord gauche avance.",
+				"followCursor": "L'écran reste immobile ; la caméra tourne autour, du côté du curseur, et monte ou descend avec lui."
+			},
+			"needsCursor": "Le curseur est masqué : cette caméra n'a rien à suivre et garde son angle de départ."
+		},
+		"clickImpact": {
+			"title": "Impact du clic",
+			"description": "Chaque clic enfonce l'écran incliné : le côté cliqué s'abaisse, puis revient.",
+			"needsRotation": "Choisissez d'abord une caméra 3D : seul un écran incliné peut être enfoncé.",
+			"needsCursor": "Le curseur est masqué : l'écran ne réagit qu'aux clics visibles.",
+			"descriptionCamera": "Chaque clic fait reculer un peu la caméra, puis elle revient."
 		},
 		"level": "Niveau de zoom",
 		"previewHold": "Maintenir pour prévisualiser l'effet de zoom",
 		"customScale": "Zoom personnalisé",
-		"selectRegion": "Sélectionnez une région de zoom à ajuster"
+		"selectRegion": "Sélectionnez une région de zoom à ajuster",
+		"cursor": {
+			"title": "Curseur",
+			"show": "Visible",
+			"hide": "Masqué"
+		}
 	},
 	"audio": {
 		"outputGain": "Niveau de sortie",
@@ -334,6 +403,9 @@
 	"cursor": {
 		"smoothing": "Lissage",
 		"clickBounce": "Rebond au clic",
+		"model3d": "Curseur 3D",
+		"model3dHint": "Style par défaut : toutes les formes du curseur passent en 3D. Les autres styles restent plats.",
+		"model3dNeedsCursor": "Activez « Afficher le curseur » pour utiliser le curseur 3D.",
 		"help": "Rendu du curseur à partir de la télémétrie enregistrée : thème, taille, lissage, flou de mouvement et rebond au clic.",
 		"clipToBoundsDescription": "Garde le curseur à l'intérieur du cadre vidéo. Désactivez pour laisser le curseur dépasser les bords — utile en cas de zoom ou de panoramique.",
 		"size": "Taille",
@@ -342,7 +414,8 @@
 		"themeDefault": "Par défaut",
 		"clipToBounds": "Rogner au canevas",
 		"motionBlur": "Flou de mouvement",
-		"theme": "Style du curseur"
+		"theme": "Style du curseur",
+		"autoHide": "Masquer si inactif"
 	},
 	"export": {
 		"gifButton": "Exporter le GIF",

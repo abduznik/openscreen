@@ -1,5 +1,11 @@
 {
 	"background": {
+		"motion": "애니메이션",
+		"motionNone": "없음",
+		"motionDrift": "드리프트",
+		"motionAurora": "오로라",
+		"motionWaves": "물결",
+		"motionGradientOnly": "애니메이션은 그라데이션 배경에만 적용됩니다. 애니메이션을 적용하려면 그라데이션을 선택하세요.",
 		"gradientLabel": "그라디언트 {{index}}",
 		"uploadCustom": "직접 업로드",
 		"unsupportedImage": "지원하지 않는 이미지입니다. JPG 또는 PNG 파일을 사용하세요.",
@@ -108,7 +114,47 @@
 		"format": "형식",
 		"fitClip": "맞추기",
 		"motionBlur": "모션 블러",
-		"roundness": "모서리 둥글기"
+		"depthOfField": "피사계 심도",
+		"depthOfFieldHint": "3D 확대",
+		"depthOfFieldNoTilt": "이 프로젝트에 3D 확대가 없습니다",
+		"roundness": "모서리 둥글기",
+		"frameStyle": "스타일",
+		"windowNone": "없음",
+		"frameWindow": "창",
+		"frameLaptop": "노트북",
+		"framePhone": "휴대폰",
+		"frameScreen": "모니터",
+		"frameTheme": "테마",
+		"frameThemeLight": "밝게",
+		"frameThemeDark": "어둡게",
+		"frameThemeHelp": "실버 본체에 밝은 테두리, 또는 그라파이트에 어두운 테두리. 모든 프레임에 적용됩니다.",
+		"windowHelp": "녹화 주위에 창 또는 3D로 모델링된 기기를 그립니다.",
+		"roundnessFrameHelp": "범위는 프레임에 맞춰 달라집니다. 100%는 그 프레임에 어울리는 가장 큰 둥글기입니다."
+	},
+	"stylePresets": {
+		"button": "프리셋",
+		"menuLabel": "스타일 프리셋",
+		"factoryName": "OpenScreen",
+		"factoryBadge": "기본 제공",
+		"empty": "저장된 프리셋이 없습니다",
+		"create": "새 프리셋 만들기…",
+		"namePlaceholder": "프리셋 이름",
+		"save": "저장",
+		"moreActions": "{{name}}에 대한 추가 작업",
+		"revealMac": "Finder에서 보기",
+		"revealWindows": "탐색기에서 보기",
+		"revealLinux": "폴더에 표시",
+		"rename": "이름 변경",
+		"update": "현재 프로젝트로 업데이트",
+		"delete": "삭제",
+		"confirmDelete": "“{{name}}”을(를) 삭제할까요?",
+		"applied": "“{{name}}” 적용됨",
+		"saved": "프리셋을 저장했습니다",
+		"updated": "프리셋을 업데이트했습니다",
+		"nameRequired": "이름을 입력하세요",
+		"nameTaken": "같은 이름의 프리셋이 이미 있습니다",
+		"loadFailed": "프리셋을 불러오지 못했습니다",
+		"saveFailed": "프리셋을 저장하지 못했습니다: {{error}}"
 	},
 	"transcript": {
 		"laneRecording": "녹화",
@@ -298,19 +344,42 @@
 			"autoDescription": "녹화된 커서 위치를 따라 카메라가 이동합니다",
 			"title": "포커스 모드"
 		},
-		"threeD": {
+		"camera": {
+			"title": "3D 카메라",
+			"off": "끔",
+			"fixed": "고정 각도",
+			"moving": "움직이는 카메라",
 			"preset": {
-				"left": "왼쪽",
-				"right": "오른쪽",
-				"iso": "Iso"
+				"iso": "위에서 비스듬히",
+				"left": "화면 왼쪽으로 돌림",
+				"right": "화면 오른쪽으로 돌림",
+				"followCursor": "커서를 따라 회전"
 			},
-			"none": "없음",
-			"title": "3D 회전"
+			"description": {
+				"off": "화면이 평평하게 유지됩니다.",
+				"iso": "한 자세를 유지합니다: 왼쪽으로 돌아가 있고 위에서 내려다봅니다.",
+				"left": "한 자세를 유지합니다: 화면이 왼쪽을 향하고 오른쪽 가장자리가 앞으로 나옵니다.",
+				"right": "한 자세를 유지합니다: 화면이 오른쪽을 향하고 왼쪽 가장자리가 앞으로 나옵니다.",
+				"followCursor": "화면은 고정된 채, 카메라가 화면 주위를 돌아 커서가 있는 쪽으로 가고 커서를 따라 오르내립니다."
+			},
+			"needsCursor": "커서가 숨겨져 있습니다. 이 카메라는 따라갈 대상이 없어 시작 각도를 유지합니다."
+		},
+		"clickImpact": {
+			"title": "클릭 눌림",
+			"description": "클릭할 때마다 기울어진 화면이 눌려 클릭한 쪽이 내려갔다가 돌아옵니다.",
+			"needsRotation": "먼저 3D 카메라를 선택하세요. 기울어진 화면만 누를 수 있습니다.",
+			"needsCursor": "커서가 숨겨져 있습니다. 화면은 보이는 클릭에만 반응합니다.",
+			"descriptionCamera": "클릭할 때마다 카메라가 살짝 뒤로 물러났다가 돌아옵니다."
 		},
 		"level": "줌 레벨",
 		"previewHold": "누르고 있으면 줌 효과 미리보기",
 		"customScale": "커스텀 줌",
-		"selectRegion": "조정할 줌 구간을 선택하세요"
+		"selectRegion": "조정할 줌 구간을 선택하세요",
+		"cursor": {
+			"title": "커서",
+			"show": "표시",
+			"hide": "숨기기"
+		}
 	},
 	"audio": {
 		"outputGain": "출력 레벨",
@@ -334,6 +403,9 @@
 	"cursor": {
 		"smoothing": "부드러움",
 		"clickBounce": "클릭 바운스",
+		"model3d": "3D 커서",
+		"model3dHint": "기본 스타일: 모든 커서 모양이 3D로 바뀝니다. 다른 스타일은 평면으로 유지됩니다.",
+		"model3dNeedsCursor": "3D 커서를 사용하려면 '커서 표시'를 켜세요.",
 		"help": "기록된 텔레메트리를 기반으로 한 커서 렌더링: 테마, 크기, 스무딩, 모션 블러, 클릭 바운스.",
 		"clipToBoundsDescription": "커서를 비디오 프레임 안에 유지합니다. 꺼두면 확대하거나 이동할 때 커서가 가장자리를 벗어날 수 있습니다.",
 		"size": "크기",
@@ -342,7 +414,8 @@
 		"themeDefault": "기본",
 		"clipToBounds": "캔버스에 맞춰 자르기",
 		"motionBlur": "모션 블러",
-		"theme": "커서 스타일"
+		"theme": "커서 스타일",
+		"autoHide": "비활성 시 자동 숨김"
 	},
 	"export": {
 		"gifButton": "GIF 내보내기",

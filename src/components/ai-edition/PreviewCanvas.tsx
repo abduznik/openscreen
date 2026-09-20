@@ -313,6 +313,9 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		};
 	}, [layout, cameraFullscreenProgress, frameSize]);
 
+	// The stage hosting the interactive overlays is the CONTENT rect, and a frame never changes
+	// it: the compositor keeps the footage the same size with or without a frame and grows the
+	// frame outward, so every handle (annotations, privacy blur, zoom focus) sits on `layout`.
 	const frameStyle = useMemo(() => buildFrameStyle(settings), [settings]);
 	const screenStyle = useMemo(
 		() => buildScreenStyle(layout, settings, frameSize),

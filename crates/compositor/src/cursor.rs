@@ -12,6 +12,17 @@ const AUTO_FOLLOW_MAX_FACTOR: f32 = 0.25;
 const AUTO_FOLLOW_RAMP_DISTANCE: f32 = 0.15;
 const AUTO_FOLLOW_REFERENCE_MS: f32 = 1000.0 / 40.0;
 
+// Convergence du curseur dessiné sur le point cliqué (`pinned_at`). La tenue couvre le contact du
+// curseur modélisé (27 à 74 ms après le clic), plus une image à 24 i/s.
+const PIN_APPROACH_S: f32 = 0.25;
+const PIN_HOLD_S: f32 = 0.1;
+const PIN_RELEASE_S: f32 = 0.25;
+
+fn smoothstep01(x: f32) -> f32 {
+    let u = x.clamp(0.0, 1.0);
+    u * u * (3.0 - 2.0 * u)
+}
+
 #[derive(Clone)]
 pub struct CursorTrack {
     /// (t_secondes, cx, cy) normalisés dans le cadre screen, triés.
@@ -22,9 +33,14 @@ pub struct CursorTrack {
     follow_samples: Vec<(f32, f32, f32)>,
     /// instants de clic (secondes) dans la fenêtre.
     clicks: Vec<f32>,
+    /// Position BRUTE de chaque clic (même ordre que `clicks`) : le pixel où l'utilisateur a
+    /// réellement cliqué. `smoothed()` la garde telle quelle, alors que la piste lissée passe
+    /// ailleurs à cet instant (cf. `pinned_at`).
+    click_points: Vec<(f32, f32)>,
     /// CHANGEMENTS d'état du curseur : (instant, `"arrow"` / `"text"` / `"pointer"` / …), triés.
     /// Une fonction en escalier, pas une valeur par échantillon : l'état tient sur des secondes
-    /// entières alors que la position est échantillonnée à ~120 Hz, donc n'enregistrer que les
+    /// entières alors que la position est échantillonnée toutes les 33 ms (~30 Hz, cf.
+    /// `CURSOR_SAMPLE_INTERVAL_MS` côté Electron), donc n'enregistrer que les
     /// transitions garde cette liste minuscule et rend `type_at` trivial.
     types: Vec<(f32, String)>,
 }
@@ -94,7 +110,9 @@ impl CursorTrack {
     /// pour que la caméra suive la trajectoire que l'utilisateur voit réellement.
     pub(crate) fn new(samples: Vec<(f32, f32, f32)>, clicks: Vec<f32>, types: Vec<(f32, String)>) -> CursorTrack {
         let follow_samples = smooth_follow_samples(&samples);
-        CursorTrack { samples, follow_samples, clicks, types }
+        let click_points =
+            clicks.iter().map(|&tc| sample_at(&samples, tc).unwrap_or((0.0, 0.0))).collect();
+        CursorTrack { samples, follow_samples, clicks, click_points, types }
     }
 
     /// État du curseur au temps `t` : la dernière transition à `t` ou avant. `None` avant la
@@ -157,29 +175,57 @@ impl CursorTrack {
         sample_at(&self.follow_samples, t)
     }
 
-    /// Position (cx, cy) BRUTE au temps `t` (interpolation linéaire), ou None si hors piste.
+    /// Position (cx, cy) au temps `t` (interpolation linéaire), ou None si hors piste. Brute, sauf
+    /// sur une piste `smoothed()`.
     pub fn at(&self, t: f32) -> Option<(f32, f32)> {
         sample_at(&self.samples, t)
     }
 
-    /// Facteur d'échelle « click bounce » — parité `getNativeCursorClickBounceScale` (TS,
-    /// `nativeCursor.ts`) : le curseur PRESSE (rétrécit, 0..38% de la fenêtre d'animation)
-    /// PUIS REBONDIT (grossit, 38..100%), pas un simple pop qui ne fait que grossir puis
-    /// redécroître. Seul le clic le plus récent précédant `t` compte (au-delà de la fenêtre,
-    /// un clic antérieur n'a plus aucun effet — contrairement à l'ancienne décroissance
-    /// exponentielle à queue infinie qui masquait ce bug).
-    pub fn bounce(&self, t: f32) -> f32 {
-        const ANIM_S: f32 = 0.26; // NATIVE_CURSOR_CLICK_ANIMATION_MS (TS) = 260ms
-        const PRESS_FRAC: f32 = 0.38;
-        let mut last_tc: Option<f32> = None;
-        for &tc in &self.clicks {
-            if tc <= t {
-                last_tc = Some(tc); // clics triés croissant -> garde le plus récent <= t
+    /// `at(t)`, ramenée sur la position brute de chaque clic autour de lui : la pointe du curseur
+    /// modélisé doit toucher le pixel cliqué. Sur une piste lissée, le ressort traîne derrière la
+    /// souris et le contact tombait à côté de la cible ; sans lissage, la piste brute dérive pendant
+    /// le contact dès que la souris repart.
+    ///
+    /// Pour chaque clic `tc`, un poids vers son point : il monte en smoothstep sur
+    /// `PIN_APPROACH_S`, vaut 1 sur `[tc, tc + PIN_HOLD_S]` (le contact), puis retombe en
+    /// smoothstep sur `PIN_RELEASE_S`. Les clics s'appliquent dans l'ordre, le plus récent
+    /// l'emporte. Continue et de pente continue en `t` ; hors de ces fenêtres, `at(t)` à l'identique.
+    pub fn pinned_at(&self, t: f32) -> Option<(f32, f32)> {
+        let (mut x, mut y) = self.at(t)?;
+        let lo = self.clicks.partition_point(|&tc| tc <= t - PIN_HOLD_S - PIN_RELEASE_S);
+        let hi = self.clicks.partition_point(|&tc| tc < t + PIN_APPROACH_S);
+        for i in lo..hi.max(lo) {
+            let d = t - self.clicks[i];
+            let w = if d < 0.0 {
+                smoothstep01(1.0 + d / PIN_APPROACH_S)
             } else {
-                break;
-            }
+                1.0 - smoothstep01((d - PIN_HOLD_S) / PIN_RELEASE_S)
+            };
+            let (cx, cy) = self.click_points[i];
+            (x, y) = if w >= 1.0 { (cx, cy) } else { (x + (cx - x) * w, y + (cy - y) * w) };
         }
-        let Some(tc) = last_tc else { return 1.0 };
+        Some((x, y))
+    }
+
+    /// Les clics de `(lo, hi]` avec leur position brute, triés.
+    pub fn clicks_with_points(&self, lo: f32, hi: f32) -> impl Iterator<Item = (f32, (f32, f32))> + '_ {
+        let a = self.clicks.partition_point(|&tc| tc <= lo);
+        let b = self.clicks.partition_point(|&tc| tc <= hi).max(a);
+        self.clicks[a..b].iter().copied().zip(self.click_points[a..b].iter().copied())
+    }
+
+    /// Facteur d'échelle « click bounce ». Cette fonction est la SEULE référence de la courbe :
+    /// son ancien jumeau TS (`nativeCursor.ts`) a été supprimé avec pixi.js, et
+    /// `scripts/inspect-native-cursor-click-bounce.mjs` ne fait que la recopier. Le curseur
+    /// PRESSE (rétrécit jusqu'à 0.76, 0..38% de la fenêtre d'animation) PUIS REBONDIT (grossit
+    /// jusqu'à 1.16, 38..100%), pas un simple pop qui ne fait que grossir puis redécroître. Seul le clic le
+    /// plus récent précédant `t` compte (au-delà de la fenêtre, un clic antérieur n'a plus
+    /// aucun effet — contrairement à l'ancienne décroissance exponentielle à queue infinie qui
+    /// masquait ce bug). L'amplitude utilisateur (clickBounce) s'applique dans `plan_cursor`.
+    pub fn bounce(&self, t: f32) -> f32 {
+        const ANIM_S: f32 = 0.26; // 260 ms
+        const PRESS_FRAC: f32 = 0.38;
+        let Some(tc) = self.last_click_at(t) else { return 1.0 };
         let elapsed = (t - tc) / ANIM_S;
         if elapsed >= 1.0 {
             return 1.0;
@@ -191,6 +237,26 @@ impl CursorTrack {
             let rebound = ((elapsed - PRESS_FRAC) / (1.0 - PRESS_FRAC) * std::f32::consts::PI).sin();
             1.0 + rebound * 0.16
         }
+    }
+
+    /// L'instant du dernier clic à `t` ou avant, `None` s'il n'y en a pas. C'est le point de
+    /// départ commun du rebond d'échelle (`bounce`) et de l'abaissement de la hauteur du curseur
+    /// modélisé — les deux doivent lire le MÊME contact, sinon le sprite s'écrase et se pose à
+    /// deux instants différents. Les clics sont triés croissant (voir `CursorTrack::new`).
+    pub(crate) fn last_click_at(&self, t: f32) -> Option<f32> {
+        let i = self.clicks.partition_point(|&tc| tc <= t);
+        if i == 0 {
+            return None;
+        }
+        Some(self.clicks[i - 1])
+    }
+
+    /// Les instants de clic dans `(lo, hi]`, triés. L'impact du clic sur le plan
+    /// (`regions::click_impact`) les somme tous, là où `bounce` ne garde que le dernier.
+    pub fn clicks_between(&self, lo: f32, hi: f32) -> &[f32] {
+        let a = self.clicks.partition_point(|&tc| tc <= lo);
+        let b = self.clicks.partition_point(|&tc| tc <= hi);
+        &self.clicks[a..b.max(a)]
     }
 
     /// Piste repositionnée par un ressort-amortisseur (parité `cursorPathSmoothing.ts` :
@@ -221,8 +287,89 @@ impl CursorTrack {
         let ys = spring_smooth(&raw_y, stiffness, damping, mass, STEP_S);
         let samples = times.into_iter().zip(xs).zip(ys).map(|((t, x), y)| (t, x, y)).collect();
         // Comme les clics, les changements d'état gardent leurs instants bruts : le lissage
-        // déplace la trajectoire, pas la chronologie de ce que faisait l'utilisateur.
-        CursorTrack::new(samples, self.clicks.clone(), self.types.clone())
+        // déplace la trajectoire, pas la chronologie de ce que faisait l'utilisateur. Les points
+        // cliqués restent ceux de la piste brute.
+        CursorTrack {
+            click_points: self.click_points.clone(),
+            ..CursorTrack::new(samples, self.clicks.clone(), self.types.clone())
+        }
+    }
+
+    /// Opacité du curseur (0.0..1.0) selon l'inactivité (auto-hide).
+    /// Si `auto_hide` est faux, retourne toujours 1.0.
+    /// Si `auto_hide` est vrai :
+    /// - Le curseur reste à 1.0 tant qu'il bouge ou clique, et pendant 1.5s après le dernier mouvement/clic.
+    /// - Entre 1.5s et 1.8s d'inactivité, il s'estompe linéairement de 1.0 à 0.0 (fade-out 300ms).
+    /// - Au-delà de 1.8s, opacité 0.0.
+    pub fn opacity_at(&self, t: f32, auto_hide: bool) -> f32 {
+        if !auto_hide || self.samples.is_empty() {
+            return 1.0;
+        }
+
+        const IDLE_TIMEOUT_S: f32 = 1.5;
+        const FADE_DURATION_S: f32 = 0.3;
+        const MOVE_THRESH_SQ: f32 = 0.015 * 0.015;
+
+        let last_click = match self.clicks.partition_point(|&tc| tc <= t) {
+            0 => None,
+            i => Some(self.clicks[i - 1]),
+        };
+
+        let (cx, cy) = match self.at(t) {
+            Some(p) => p,
+            None => return 1.0,
+        };
+
+        let idx = self.samples.partition_point(|s| s.0 <= t);
+        let start_t = self.samples[0].0;
+
+        let mut arrival_t = if idx > 0 { self.samples[idx - 1].0 } else { start_t };
+
+        if idx > 0 {
+            let mut i = idx - 1;
+            while i > 0 {
+                let prev = self.samples[i - 1];
+                let dx = cx - prev.1;
+                let dy = cy - prev.2;
+                if dx * dx + dy * dy > MOVE_THRESH_SQ {
+                    arrival_t = self.samples[i].0;
+                    break;
+                }
+                if t - prev.0 > IDLE_TIMEOUT_S + FADE_DURATION_S {
+                    arrival_t = prev.0;
+                    break;
+                }
+                i -= 1;
+                if i == 0 {
+                    arrival_t = start_t;
+                }
+            }
+        }
+
+        if idx > 1 {
+            let s1 = self.samples[idx - 1];
+            let s0 = self.samples[idx - 2];
+            let d_step = (s1.1 - s0.1) * (s1.1 - s0.1) + (s1.2 - s0.2) * (s1.2 - s0.2);
+            if d_step > 0.005 * 0.005 && (t - s1.0).abs() < 0.1 {
+                arrival_t = t;
+            }
+        }
+
+        let mut last_activity = arrival_t;
+        if let Some(tc) = last_click {
+            if tc > last_activity {
+                last_activity = tc;
+            }
+        }
+
+        let idle_time = (t - last_activity).max(0.0);
+        if idle_time <= IDLE_TIMEOUT_S {
+            1.0
+        } else if idle_time >= IDLE_TIMEOUT_S + FADE_DURATION_S {
+            0.0
+        } else {
+            1.0 - (idle_time - IDLE_TIMEOUT_S) / FADE_DURATION_S
+        }
     }
 }
 
@@ -340,5 +487,145 @@ mod tests {
             Some("arrow"),
             "omitted cursorType after pointer must reset to arrow independently"
         );
+    }
+
+    /// `pinned_at` pose le curseur sur le point BRUT du clic pendant le contact, même quand la
+    /// piste lissée traîne loin derrière, reste continue, et rend `at()` loin des clics.
+    #[test]
+    fn the_pinned_position_holds_the_raw_click_point() {
+        // Un geste rapide de 0,1 à 0,7 qui s'arrête pile sur le clic, puis repart vers le bas.
+        let samples: Vec<(f32, f32, f32)> = (0..=60)
+            .map(|k| {
+                let t = k as f32 / 30.0;
+                let x = 0.1 + 0.6 * (t / 1.0).min(1.0);
+                let y = 0.5 + 0.3 * ((t - 1.0) / 0.3).clamp(0.0, 1.0);
+                (t, x, y)
+            })
+            .collect();
+        let raw = CursorTrack::new(samples, vec![1.0], vec![]);
+        let clicked = raw.at(1.0).unwrap();
+        for track in [raw.smoothed(0.0), raw.smoothed(0.5), raw.smoothed(1.0)] {
+            let lag = track.at(1.0).unwrap();
+            for ms in 0..=100 {
+                let t = 1.0 + ms as f32 / 1000.0;
+                assert_eq!(track.pinned_at(t), Some(clicked), "{ms} ms après le clic");
+            }
+            // Loin des clics : la piste telle quelle.
+            for t in [0.5, 0.74, 1.36, 1.8] {
+                assert_eq!(track.pinned_at(t), track.at(t), "t = {t}");
+            }
+            // Continue : pas de saut d'une milliseconde à l'autre.
+            for k in 0..2000 {
+                let (a, b) = (track.pinned_at(k as f32 * 0.001).unwrap(), track.pinned_at((k + 1) as f32 * 0.001).unwrap());
+                assert!((a.0 - b.0).abs() < 4e-3 && (a.1 - b.1).abs() < 4e-3, "saut en {k} ms : {a:?} -> {b:?}");
+            }
+            println!("au clic, piste en {lag:?}, point cliqué {clicked:?}");
+        }
+        // Le lissage traîne bel et bien : sans la convergence, le contact tomberait à côté.
+        assert!(raw.smoothed(0.5).at(1.0).unwrap().0 < 0.69);
+    }
+
+    /// Enveloppe du click bounce : neutre hors fenêtre, continue aux jonctions, creux à 0.76 et
+    /// pic à 1.16 aux bons instants, et un nouveau clic redémarre la courbe.
+    #[test]
+    fn click_bounce_envelope() {
+        let near = |a: f32, b: f32, tol: f32| (a - b).abs() < tol;
+        let track = CursorTrack::new(vec![], vec![1.0], vec![]);
+        let b = |t: f32| track.bounce(t);
+
+        // Exactement neutre avant le premier clic et après la fenêtre de 260 ms.
+        assert_eq!(b(0.0), 1.0);
+        assert_eq!(b(0.999), 1.0);
+        assert_eq!(b(1.2601), 1.0);
+        assert_eq!(b(5.0), 1.0);
+
+        // Continuité aux jonctions (fraction 0, 0.38 et 1) : ±0.1 ms autour reste à ~1.
+        const DT: f32 = 1e-4;
+        assert_eq!(b(1.0), 1.0, "fraction 0");
+        assert!(near(b(1.0 + DT), 1.0, 2e-3));
+        let press_end = 1.0 + 0.38 * 0.26;
+        assert!(near(b(press_end - DT), 1.0, 2e-3), "fraction 0.38⁻ : {}", b(press_end - DT));
+        assert!(near(b(press_end + DT), 1.0, 2e-3), "fraction 0.38⁺ : {}", b(press_end + DT));
+        assert!(near(b(1.26 - DT), 1.0, 2e-3), "fraction 1⁻ : {}", b(1.26 - DT));
+
+        // Creux de la pression (fraction 0.19 → +49.4 ms), pic du rebond (0.69 → +179.4 ms).
+        assert!(near(b(1.0494), 0.76, 1e-4), "creux : {}", b(1.0494));
+        assert!(near(b(1.1794), 1.16, 1e-4), "pic : {}", b(1.1794));
+        assert!(b(1.03) > 0.76 && b(1.07) > 0.76, "le creux est un minimum");
+        assert!(b(1.15) < 1.16 && b(1.21) < 1.16, "le pic est un maximum");
+
+        // Seul le clic le plus récent compte : le second redémarre la courbe. À 1.1 s le premier
+        // serait encore dans son rebond (≈1.0037), le second l'écrase à 1.0 pile.
+        let double = CursorTrack::new(vec![], vec![1.0, 1.1], vec![]);
+        assert_eq!(double.bounce(1.1), 1.0, "redémarrage à la fraction 0");
+        assert!(near(double.bounce(1.1494), 0.76, 1e-4), "nouveau creux : {}", double.bounce(1.1494));
+        assert!(near(double.bounce(1.2794), 1.16, 1e-4), "nouveau pic : {}", double.bounce(1.2794));
+        assert_eq!(double.bounce(1.3601), 1.0, "neutre après la fenêtre du second clic");
+    }
+
+    #[test]
+    fn auto_hide_disabled_always_full_opacity() {
+        let track = CursorTrack::new(
+            vec![(0.0, 0.5, 0.5), (10.0, 0.5, 0.5)],
+            vec![],
+            vec![],
+        );
+        assert_eq!(track.opacity_at(0.0, false), 1.0);
+        assert_eq!(track.opacity_at(5.0, false), 1.0);
+        assert_eq!(track.opacity_at(10.0, false), 1.0);
+    }
+
+    #[test]
+    fn auto_hide_fades_out_after_idle_timeout() {
+        // Le curseur est stationnaire à (0.5, 0.5) de 0 à 5s.
+        let track = CursorTrack::new(
+            vec![(0.0, 0.5, 0.5), (1.0, 0.5, 0.5), (2.0, 0.5, 0.5), (3.0, 0.5, 0.5), (4.0, 0.5, 0.5)],
+            vec![],
+            vec![],
+        );
+        // Pendant 1.5s, opacité 1.0
+        assert_eq!(track.opacity_at(0.0, true), 1.0);
+        assert_eq!(track.opacity_at(1.0, true), 1.0);
+        assert_eq!(track.opacity_at(1.5, true), 1.0);
+
+        // Entre 1.5s et 1.8s, estompage linéaire
+        let op_mid = track.opacity_at(1.65, true);
+        assert!((op_mid - 0.5).abs() < 0.05, "mi-parcours d'estompage: {op_mid}");
+
+        // À 1.8s et au-delà, opacité 0.0
+        assert_eq!(track.opacity_at(1.8, true), 0.0);
+        assert_eq!(track.opacity_at(3.0, true), 0.0);
+    }
+
+    #[test]
+    fn auto_hide_wakes_on_movement_or_click() {
+        // Reste immobile jusqu'à 2s, bouge à 2.5s, s'arrête, clic à 4.0s
+        let track = CursorTrack::new(
+            vec![
+                (0.0, 0.1, 0.1),
+                (1.0, 0.1, 0.1),
+                (2.0, 0.1, 0.1),
+                (2.5, 0.8, 0.8), // mouvement net
+                (2.6, 0.8, 0.8),
+                (4.0, 0.8, 0.8),
+                (5.0, 0.8, 0.8),
+            ],
+            vec![4.0], // clic à 4.0s
+            vec![],
+        );
+
+        // À 1.9s, inactif depuis 0s -> 0.0
+        assert_eq!(track.opacity_at(1.9, true), 0.0);
+
+        // À 2.5s, vient de bouger -> réveil à 1.0
+        assert_eq!(track.opacity_at(2.5, true), 1.0);
+        // À 3.5s, 1s après le mouvement -> toujours 1.0
+        assert_eq!(track.opacity_at(3.5, true), 1.0);
+
+        // Sans le clic à 4.0, à 4.5s (2s après 2.5) il serait éteint.
+        // Mais le clic à 4.0s le réveille -> 1.0
+        assert_eq!(track.opacity_at(4.2, true), 1.0);
+        // Et s'éteint 1.8s après le clic (4.0 + 1.8 = 5.8s)
+        assert_eq!(track.opacity_at(5.9, true), 0.0);
     }
 }

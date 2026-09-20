@@ -1,5 +1,11 @@
 {
 	"background": {
+		"motion": "Animasyon",
+		"motionNone": "Yok",
+		"motionDrift": "Kayma",
+		"motionAurora": "Kutup ışığı",
+		"motionWaves": "Dalgalar",
+		"motionGradientOnly": "Animasyon yalnızca gradyan arka planlara uygulanır. Canlandırmak için bir gradyan seçin.",
 		"gradientLabel": "Gradyan {{index}}",
 		"uploadCustom": "Özel Yükle",
 		"unsupportedImage": "Desteklenmeyen görsel. JPG veya PNG dosyası kullanın.",
@@ -108,7 +114,47 @@
 		"format": "Biçim",
 		"fitClip": "Sığdır",
 		"motionBlur": "Hareket Bulanıklığı",
-		"roundness": "Yuvarlaklık"
+		"depthOfField": "Alan derinliği",
+		"depthOfFieldHint": "3D yakınlaştırmalar",
+		"depthOfFieldNoTilt": "Bu projede 3D yakınlaştırma yok",
+		"roundness": "Yuvarlaklık",
+		"frameStyle": "Stil",
+		"windowNone": "Yok",
+		"frameWindow": "Pencere",
+		"frameLaptop": "Dizüstü",
+		"framePhone": "Telefon",
+		"frameScreen": "Ekran",
+		"frameTheme": "Tema",
+		"frameThemeLight": "Açık",
+		"frameThemeDark": "Koyu",
+		"frameThemeHelp": "Gümüş gövde ve açık çerçeve ya da grafit ve koyu. Tüm çerçeveler için geçerlidir.",
+		"windowHelp": "Kaydın çevresine bir pencere ya da 3B modellenmiş bir cihaz çizer.",
+		"roundnessFrameHelp": "Aralık çerçeveye uyum sağlar: %100, ona yakışan en belirgin yuvarlaklıktır."
+	},
+	"stylePresets": {
+		"button": "Ön ayarlar",
+		"menuLabel": "Stil ön ayarları",
+		"factoryName": "OpenScreen",
+		"factoryBadge": "Yerleşik",
+		"empty": "Henüz kayıtlı ön ayar yok",
+		"create": "Yeni ön ayar oluştur…",
+		"namePlaceholder": "Ön ayar adı",
+		"save": "Kaydet",
+		"moreActions": "{{name}} için diğer işlemler",
+		"revealMac": "Finder’da göster",
+		"revealWindows": "Dosya Gezgini’nde göster",
+		"revealLinux": "Klasörde göster",
+		"rename": "Yeniden adlandır",
+		"update": "Mevcut projeden güncelle",
+		"delete": "Sil",
+		"confirmDelete": "“{{name}}” silinsin mi?",
+		"applied": "“{{name}}” uygulandı",
+		"saved": "Ön ayar kaydedildi",
+		"updated": "Ön ayar güncellendi",
+		"nameRequired": "Bir ad girin",
+		"nameTaken": "Bu adda bir ön ayar zaten var",
+		"loadFailed": "Ön ayarlar yüklenemedi",
+		"saveFailed": "Ön ayar kaydedilemedi: {{error}}"
 	},
 	"transcript": {
 		"laneRecording": "Kayıt",
@@ -298,19 +344,42 @@
 			"autoDescription": "Kamera kaydedilen imleç konumunu takip eder",
 			"title": "Odak Modu"
 		},
-		"threeD": {
+		"camera": {
+			"title": "3D kamera",
+			"off": "Kapalı",
+			"fixed": "Sabit açı",
+			"moving": "Hareketli kamera",
 			"preset": {
-				"left": "Sol",
-				"right": "Sağ",
-				"iso": "Iso"
+				"iso": "Yukarıdan çapraz",
+				"left": "Ekran sola dönük",
+				"right": "Ekran sağa dönük",
+				"followCursor": "İmleçle birlikte döner"
 			},
-			"none": "Yok",
-			"title": "3D Döndürme"
+			"description": {
+				"off": "Ekran düz kalır.",
+				"iso": "Tek bir pozda kalır: sola dönük ve yukarıdan görünür.",
+				"left": "Tek bir pozda kalır: ekran sola bakar, sağ kenarı öne çıkar.",
+				"right": "Tek bir pozda kalır: ekran sağa bakar, sol kenarı öne çıkar.",
+				"followCursor": "Ekran sabit kalır; kamera etrafında imlecin olduğu tarafa döner ve imleçle birlikte yükselip alçalır."
+			},
+			"needsCursor": "İmleç gizli: bu kameranın izleyecek bir şeyi yok ve başlangıç açısında kalır."
+		},
+		"clickImpact": {
+			"title": "Tıklama etkisi",
+			"description": "Her tıklama eğik ekranı bastırır: tıklanan taraf çöker, sonra geri döner.",
+			"needsRotation": "Önce bir 3D kamera seçin: yalnızca eğik bir ekran bastırılabilir.",
+			"needsCursor": "İmleç gizli: ekran yalnızca görünen tıklamalara tepki verir.",
+			"descriptionCamera": "Her tıklama kamerayı biraz geri iter, ardından kamera geri gelir."
 		},
 		"level": "Yakınlaştırma Seviyesi",
 		"previewHold": "Yakınlaştırma efektini önizlemek için basılı tutun",
 		"customScale": "Özel Yakınlaştırma",
-		"selectRegion": "Ayarlamak için bir yakınlaştırma bölgesi seçin"
+		"selectRegion": "Ayarlamak için bir yakınlaştırma bölgesi seçin",
+		"cursor": {
+			"title": "İmleç",
+			"show": "Görünür",
+			"hide": "Gizli"
+		}
 	},
 	"audio": {
 		"outputGain": "Çıkış seviyesi",
@@ -334,6 +403,9 @@
 	"cursor": {
 		"smoothing": "Yumuşatma",
 		"clickBounce": "Tıklama Sıçraması",
+		"model3d": "3B imleç",
+		"model3dHint": "Varsayılan stil: tüm imleç şekilleri 3B olur. Diğer stiller düz kalır.",
+		"model3dNeedsCursor": "3B imleci kullanmak için «İmleci Göster»i açın.",
 		"help": "Kaydedilen telemetriden imleç çizimi: tema, boyut, yumuşatma, hareket bulanıklığı ve tıklama sıçraması.",
 		"clipToBoundsDescription": "İmleci video kare içinde tutar. İmlecin kenarları aşmasına izin vermek için kapatın — yakınlaştırma veya kaydırma yapılırken kullanışlıdır.",
 		"size": "Boyut",
@@ -342,7 +414,8 @@
 		"themeDefault": "Varsayılan",
 		"clipToBounds": "Tuvale Kırp",
 		"motionBlur": "Hareket Bulanıklığı",
-		"theme": "İmleç Stili"
+		"theme": "İmleç Stili",
+		"autoHide": "Hareketsizken gizle"
 	},
 	"export": {
 		"gifButton": "GIF Olarak Dışa Aktar",

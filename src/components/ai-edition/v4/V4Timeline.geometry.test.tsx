@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { Profiler, type ProfilerOnRenderCallback } from "react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 // The regression under test is geometric, so the environment has to have a size:
 // jsdom reports 0 for every box, which would leave `pxPerSec` at 0 (the
@@ -15,6 +16,13 @@ vi.mock("@/contexts/I18nContext", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
 // The audio lane's pill renders a ClipWaveform; no decode in this geometry suite.
 vi.mock("@/hooks/useAudioPeaks", () => ({ useAudioPeaks: () => null }));
+
+// The duration gate reads its timecode's width off a canvas context. jsdom has
+// no canvas, so every test here runs against this stub: 6px a character, the
+// same figure the component's no-canvas fallback assumes, which keeps the width
+// arithmetic in the tests below the one the first cut reasoned in. The
+// measured-path test re-aims it at a wider face and expects the gate to follow.
+const measureText = vi.fn((text: string) => ({ width: text.length * 6 }));
 
 import { ShortcutsProvider } from "@/contexts/ShortcutsContext";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
@@ -54,6 +62,13 @@ beforeAll(() => {
 			},
 		}),
 	});
+	vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+		() => ({ measureText }) as unknown as CanvasRenderingContext2D,
+	);
+});
+
+afterEach(() => {
+	measureText.mockImplementation((text: string) => ({ width: text.length * 6 }));
 });
 
 function clip(startSec: number, endSec: number) {
@@ -76,6 +91,7 @@ function renderTimeline(
 	clips = [clip(0, TOTAL_SEC)],
 	annotation = { id: "ann1", startMs: 10_000, endMs: 11_000 },
 	assets: Array<Record<string, unknown>> = [NO_CAMERA_ASSET],
+	onRender?: ProfilerOnRenderCallback,
 ) {
 	const tl = {
 		clips,
@@ -104,13 +120,14 @@ function renderTimeline(
 			/* the toolbar only awaits it */
 		}),
 	};
-	render(
+	const setCurrentTime = vi.fn();
+	const timeline = (
 		<ShortcutsProvider>
 			<V4Timeline
 				// Only the members the lanes and the clip row read are mocked; the prop
 				// stays typed as the real API rather than widened to `any` (AGENTS.md).
 				tl={tl as unknown as ReturnType<typeof useTimeline>}
-				setCurrentTime={vi.fn()}
+				setCurrentTime={setCurrentTime}
 				playing={false}
 				onTogglePlay={vi.fn()}
 				onPrevClip={vi.fn()}
@@ -118,14 +135,28 @@ function renderTimeline(
 				onEditClip={vi.fn()}
 				onAddVoiceover={vi.fn()}
 			/>
-		</ShortcutsProvider>,
+		</ShortcutsProvider>
+	);
+	render(
+		onRender ? (
+			<Profiler id="timeline" onRender={onRender}>
+				{timeline}
+			</Profiler>
+		) : (
+			timeline
+		),
 	);
 	return {
 		pill: screen.getByTitle("toolbar.newAnnotation"),
 		clipEls: Array.from(document.querySelectorAll<HTMLElement>("[data-clip-id]")),
 		tl,
+		setCurrentTime,
 	};
 }
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
 
 /** Drag a handle by `dxPx`. The move/up listeners live on `window`, so the drag
  *  is driven by pointer deltas alone — the handle may re-mount under it. */
@@ -146,6 +177,62 @@ function wheelZoomOn(el: HTMLElement, notches: number) {
 function zoomIn(notches: number) {
 	wheelZoomOn(document.querySelector("[class*=tlTracks]") as HTMLElement, notches);
 }
+
+describe("V4Timeline scrubbing", () => {
+	it("publishes at most one React scrub-state update per animation frame", () => {
+		const frames = new Map<number, FrameRequestCallback>();
+		let nextFrameId = 1;
+		vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+			const frameId = nextFrameId++;
+			frames.set(frameId, callback);
+			return frameId;
+		});
+		vi.stubGlobal("cancelAnimationFrame", (frameId: number) => {
+			frames.delete(frameId);
+		});
+		const onRender = vi.fn<ProfilerOnRenderCallback>();
+		const { setCurrentTime } = renderTimeline(
+			[clip(0, TOTAL_SEC)],
+			{ id: "ann1", startMs: 10_000, endMs: 11_000 },
+			[NO_CAMERA_ASSET],
+			onRender,
+		);
+		const ruler = document.querySelector<HTMLElement>("[class*=tlRulerRow]");
+		expect(ruler).not.toBeNull();
+
+		// What ONE scrub-state update costs in commits, measured on the pointer-down seek
+		// (which sets it once, synchronously) rather than hardcoded: the toolbar's Radix
+		// tooltip triggers re-attach their ref on every commit and add a nested one.
+		const commitsBeforePointerDown = onRender.mock.calls.length;
+		fireEvent.pointerDown(ruler as HTMLElement, { button: 0, clientX: 90 });
+		const commitsPerUpdate = onRender.mock.calls.length - commitsBeforePointerDown;
+		expect(commitsPerUpdate).toBeGreaterThan(0);
+
+		// Over two frames: no pointer move commits, and each frame costs exactly one
+		// update however many moves it coalesced.
+		for (const [clientXs, expectedSec] of [
+			[[180, 270, 360], 720],
+			[[450, 540], 1080],
+		] as const) {
+			const commitsBeforeFrame = onRender.mock.calls.length;
+			setCurrentTime.mockClear();
+			for (const clientX of clientXs) fireEvent.pointerMove(window, { clientX });
+
+			expect(onRender).toHaveBeenCalledTimes(commitsBeforeFrame);
+			expect(setCurrentTime).not.toHaveBeenCalled();
+			expect(frames.size).toBe(1);
+
+			const [[frameId, frame]] = frames;
+			frames.delete(frameId);
+			act(() => frame(0));
+
+			expect(onRender).toHaveBeenCalledTimes(commitsBeforeFrame + commitsPerUpdate);
+			expect(setCurrentTime).toHaveBeenCalledTimes(1);
+			expect(setCurrentTime).toHaveBeenCalledWith(expectedSec);
+		}
+		fireEvent.pointerUp(window);
+	});
+});
 
 describe("V4Timeline lane pills", () => {
 	it("draws a pill exactly as wide as its region, at any zoom", () => {
@@ -386,6 +473,51 @@ describe("V4Timeline clip row", () => {
 		zoomIn(40);
 		expect(clipEls.map((el) => el.style.left)).toEqual([startsAt(0), startsAt(600), startsAt(900)]);
 		expect(pill.style.left).toBe(clipEls[1].style.left);
+	});
+
+	it("shows each clip's edited duration on the card", () => {
+		renderTimeline(CLIPS);
+		// 600s / 300s / 900s of an 1800s source: each card reads the clip's own
+		// length on the timeline (out − in), not the asset's original length. A
+		// speed region over the clip changes how long it plays, not this number.
+		expect(screen.getByText("10:00.0")).toBeInTheDocument();
+		expect(screen.getByText("5:00.0")).toBeInTheDocument();
+		expect(screen.getByText("15:00.0")).toBeInTheDocument();
+	});
+
+	it("withholds the duration from a card too small to hold it", () => {
+		// 250s at this zoom is a 125px card: past the narrow gate, so it still shows
+		// its name and pencil, but not wide enough for the timecode — which would
+		// otherwise escape the label pill and sit on the delete button. Measured in
+		// the running window, not derived here.
+		renderTimeline([clip(0, 250), clip(250, TOTAL_SEC)]);
+
+		expect(screen.queryByText("4:10.0")).not.toBeInTheDocument();
+		// The card that does have the room still reads its length.
+		expect(screen.getByText("25:50.0")).toBeInTheDocument();
+	});
+
+	it("asks for the room this card's own timecode needs, not the shortest one", () => {
+		// 600s of 3965s is a ~130px card. `0:12.0` would fit there; `10:00.0` is a
+		// character wider and does not, and `formatSec` has no hour field to stop
+		// the string growing — a clip past a hundred minutes reads `100:00.0`. A
+		// single fixed width would have let those through onto the delete button.
+		renderTimeline([clip(0, 600), clip(600, 3965)]);
+
+		expect(screen.queryByText("10:00.0")).not.toBeInTheDocument();
+		expect(screen.getByText("56:05.0")).toBeInTheDocument();
+	});
+
+	it("measures the timecode where a canvas exists, rather than averaging its length", () => {
+		// The stubbed face costs 9px a character against the 6px the jsdom fallback
+		// assumes. A 700s clip of this 3965s span is a ~159px card — roomy enough
+		// by the count (50 + 47 + 7×6 = 139) and too tight once the face is read
+		// (50 + 47 + 7×9 = 160) — so only a measured gate withholds it.
+		measureText.mockImplementation((text: string) => ({ width: text.length * 9 }));
+		renderTimeline([clip(0, 700), clip(700, 3965)]);
+
+		expect(screen.queryByText("11:40.0")).not.toBeInTheDocument();
+		expect(screen.getByText("54:25.0")).toBeInTheDocument();
 	});
 
 	it("takes the card gutter out of each clip's own width", () => {

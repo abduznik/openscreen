@@ -3,13 +3,17 @@ import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { getAvailableLocales, getLocaleName } from "@/i18n/loader";
 import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences";
 import { nativeBridgeClient } from "@/native";
-import { type CameraDevice, useCameraDevices } from "../../hooks/useCameraDevices";
-import { type MicrophoneDevice, useMicrophoneDevices } from "../../hooks/useMicrophoneDevices";
+import { type CameraDevice } from "../../hooks/useCameraDevices";
+import { useCameraHudSync } from "../../hooks/useCameraHudSync";
+import {
+	isPlaceholderMicrophoneLabel,
+	type MicrophoneDevice,
+	useMicrophoneDevices,
+} from "../../hooks/useMicrophoneDevices";
 import { usePortalOwnsSource } from "../../hooks/usePortalOwnsSource";
 import { useScreenRecorder } from "../../hooks/useScreenRecorder";
 import { requestCameraAccess } from "../../lib/requestCameraAccess";
 import {
-	HudAutoZoomButton,
 	HudCameraButton,
 	HudCursorButton,
 	HudDivider,
@@ -60,6 +64,10 @@ function getAvailableScreenHeight(): number {
 	return available && available > 0 ? available : FALLBACK_SCREEN_HEIGHT;
 }
 
+function hudBarMaxHeightCss(): string {
+	return `${computeHudBarMaxHeight(getAvailableScreenHeight())}px`;
+}
+
 /** Launches the floating recording HUD and its recorder controls. */
 export function LaunchWindow() {
 	const t = useScopedT("launch");
@@ -103,13 +111,13 @@ export function LaunchWindow() {
 		setWebcamEnabled,
 		webcamDeviceId,
 		setWebcamDeviceId,
+		webcamDeviceName,
 		setWebcamDeviceName,
 		cursorCaptureMode,
 		setCursorCaptureMode,
-		autoZoomEnabled,
-		setAutoZoomEnabled,
 		softwareEncoderFallbackNoticeVisible,
 		dismissSoftwareEncoderFallbackNotice,
+		recordingPrefsLoaded,
 	} = useScreenRecorder();
 
 	// Choosing a device and switching one on are deliberately separate concerns.
@@ -160,21 +168,29 @@ export function LaunchWindow() {
 	// Passing `webcamDeviceId` as the preferred device is what keeps the pick the
 	// user made in the editor's Rec stage: this window is destroyed and rebuilt
 	// for every recording, so the enumeration default would otherwise revert the
-	// camera to whatever the OS lists first on each take.
+	// camera to whatever the OS lists first on each take. Write-back waits for
+	// persisted prefs so an enumeration default cannot overwrite a late cam2.
 	const {
 		devices: cameraDevices,
-		selectedDevice: selectedCamera,
 		selectedDeviceId: selectedCameraId,
 		setSelectedDeviceId: setSelectedCameraId,
 		isLoading: isCameraDevicesLoading,
+		isReady: cameraDevicesReady,
 		error: cameraDevicesError,
-	} = useCameraDevices(true, webcamDeviceId);
+	} = useCameraHudSync({
+		webcamDeviceId,
+		webcamDeviceName,
+		recordingPrefsLoaded,
+		setWebcamDeviceId,
+		setWebcamDeviceName,
+	});
 	// The microphone list stays lazy: enumerating it asks for mic permission,
 	// which would light the OS "in use" indicator just for opening the HUD.
 	const {
 		devices: micDevices,
 		selectedDeviceId: selectedMicId,
 		setSelectedDeviceId: setSelectedMicId,
+		isReady: micDevicesReady,
 	} = useMicrophoneDevices(
 		microphoneEnabled || isDeviceSettingsOpen,
 		microphoneDeviceId,
@@ -184,22 +200,15 @@ export function LaunchWindow() {
 	useEffect(() => {
 		if (selectedMicId && selectedMicId !== "default") {
 			setMicrophoneDeviceId(selectedMicId);
-			setMicrophoneDeviceName(micDevices.find((d) => d.deviceId === selectedMicId)?.label);
+			const liveLabel = micDevices.find((d) => d.deviceId === selectedMicId)?.label;
+			if (liveLabel && !isPlaceholderMicrophoneLabel(liveLabel, selectedMicId)) {
+				setMicrophoneDeviceName(liveLabel);
+			}
+		} else if (micDevicesReady) {
+			setMicrophoneDeviceId(undefined);
+			setMicrophoneDeviceName(undefined);
 		}
-	}, [selectedMicId, micDevices, setMicrophoneDeviceId, setMicrophoneDeviceName]);
-
-	// Keyed on the chosen device's own fields, never on the `cameraDevices` array.
-	// That array is rebuilt on every `devicechange`, and mirroring the selection
-	// back on each rebuild put this effect in a tug-of-war with the preference
-	// adoption inside `useCameraDevices`: the two wrote each other's value on
-	// every commit and the HUD spun without ever settling.
-	const selectedCameraLabel = selectedCamera?.label;
-	useEffect(() => {
-		if (selectedCameraId) {
-			setWebcamDeviceId(selectedCameraId);
-			setWebcamDeviceName(selectedCameraLabel);
-		}
-	}, [selectedCameraId, selectedCameraLabel, setWebcamDeviceId, setWebcamDeviceName]);
+	}, [selectedMicId, micDevices, micDevicesReady, setMicrophoneDeviceId, setMicrophoneDeviceName]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -349,6 +358,14 @@ export function LaunchWindow() {
 	//      down as CSS custom properties.
 	// ---------------------------------------------------------------------------
 	const hudAllocatedSizeRef = useRef({ width: 0, height: 0, orientation: trayLayout });
+	// Last stack rect sent to the main process, so a measurement that changed nothing
+	// costs no IPC.
+	const lastSentHudContentRef = useRef<{
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+	} | null>(null);
 	const isDraggingHudRef = useRef(false);
 
 	useLayoutEffect(() => {
@@ -357,10 +374,7 @@ export function LaunchWindow() {
 		anchor.style.setProperty("--hud-bar-bottom", `${HUD_BAR_BOTTOM}px`);
 		anchor.style.setProperty("--hud-popover-gap", `${HUD_POPOVER_GAP}px`);
 		anchor.style.setProperty("--hud-stack-gap", `${HUD_STACK_GAP}px`);
-		anchor.style.setProperty(
-			"--hud-bar-max-h",
-			`${computeHudBarMaxHeight(getAvailableScreenHeight())}px`,
-		);
+		anchor.style.setProperty("--hud-bar-max-h", hudBarMaxHeightCss());
 	}, []);
 
 	const measureHudSize = useCallback(() => {
@@ -418,30 +432,84 @@ export function LaunchWindow() {
 			required.height > allocated.height ||
 			granted.width + HUD_GROWTH_RESERVE < allocated.width ||
 			granted.height + HUD_GROWTH_RESERVE < allocated.height;
+
+		// The main process keeps this rect on screen, not the window: the window is
+		// mostly transparent reserve, and clamping it would strand the bar at the
+		// bottom of the screen. It is the whole stack, the bar plus any popover or
+		// notice open above it, because those are just as visible as the bar. Rects
+		// are already window-relative (the frameless viewport is the whole window),
+		// and since the stack is centred and pinned HUD_BAR_BOTTOM above the window's
+		// bottom edge (LaunchWindow.module.css), the rect the granted size will
+		// produce is computed exactly rather than measured a frame late.
+		const anchorRect = anchorEl?.getBoundingClientRect();
+		const stackRect = anchorRect?.width && anchorRect.height ? anchorRect : barRect;
+		const stackWidth = stackRect.width || barWidth;
+		const stackHeight = stackRect.height || barHeight;
+		const currentContent = {
+			x: stackRect.x,
+			y: stackRect.y,
+			width: stackWidth,
+			height: stackHeight,
+		};
+		const grantedContent = {
+			x: (granted.width - stackWidth) / 2,
+			y: granted.height - HUD_BAR_BOTTOM - stackHeight,
+			width: stackWidth,
+			height: stackHeight,
+		};
+
 		if (!needsResize) {
+			const last = lastSentHudContentRef.current;
+			const contentChanged =
+				!last ||
+				last.width !== currentContent.width ||
+				last.height !== currentContent.height ||
+				Math.abs(last.x - currentContent.x) >= 1 ||
+				Math.abs(last.y - currentContent.y) >= 1;
+			if (!contentChanged) return;
+			// No resize, but the stack changed inside the reserve (the bar grew, a
+			// popover opened), and the main process must keep it on screen.
+			lastSentHudContentRef.current = currentContent;
+			window.electronAPI.setHudOverlayContent?.(currentContent);
 			return;
 		}
 
 		allocated.orientation = trayLayout;
 		allocated.width = granted.width;
 		allocated.height = granted.height;
-		window.electronAPI.setHudOverlaySize(granted.width, granted.height);
+		lastSentHudContentRef.current = grantedContent;
+		window.electronAPI.setHudOverlaySize(granted.width, granted.height, grantedContent);
 	}, [trayLayout]);
 
 	// One persistent observer; elements wire themselves up via callback refs as
-	// they mount/unmount. Only the bar and the notice column are observed — the
-	// popovers deliberately are not, since their space is already reserved.
+	// they mount/unmount. The bar and the notice column size the window; the anchor
+	// (the whole stack) only feeds the content rect, so a popover opening costs a
+	// re-clamp but never a native resize.
 	const hudResizeObserverRef = useRef<ResizeObserver | null>(null);
 	useEffect(() => {
 		const observer = new ResizeObserver(() => measureHudSize());
 		hudResizeObserverRef.current = observer;
 		if (hudBarRef.current) observer.observe(hudBarRef.current);
 		if (hudNoticesRef.current) observer.observe(hudNoticesRef.current);
+		if (hudAnchorRef.current) observer.observe(hudAnchorRef.current);
 		measureHudSize();
 		return () => {
 			observer.disconnect();
 			hudResizeObserverRef.current = null;
 		};
+	}, [measureHudSize]);
+
+	// Screen-derived caps follow the display the HUD is on: after a drag onto a
+	// shorter display, a tall vertical tray would otherwise overflow its work area.
+	useEffect(() => {
+		const onScreenChange = () => {
+			hudAnchorRef.current?.style.setProperty("--hud-bar-max-h", hudBarMaxHeightCss());
+			measureHudSize();
+		};
+		// Chromium's Screen is an EventTarget; TypeScript's DOM lib does not say so yet.
+		const hudScreen = window.screen as Screen & Partial<EventTarget>;
+		hudScreen.addEventListener?.("change", onScreenChange);
+		return () => hudScreen.removeEventListener?.("change", onScreenChange);
 	}, [measureHudSize]);
 
 	const observeHudElement = useCallback(
@@ -537,6 +605,65 @@ export function LaunchWindow() {
 		},
 		[defaultSourceName],
 	);
+	const deviceReadinessRef = useRef({
+		recordingPrefsLoaded,
+		cameraDevicesReady,
+		micDevicesReady,
+		microphoneEnabled,
+		webcamEnabled,
+	});
+	const toggleRecordingRef = useRef(toggleRecording);
+	const startWhenDevicesReadyInFlight = useRef<Promise<void> | null>(null);
+	useLayoutEffect(() => {
+		deviceReadinessRef.current = {
+			recordingPrefsLoaded,
+			cameraDevicesReady,
+			micDevicesReady,
+			microphoneEnabled,
+			webcamEnabled,
+		};
+		toggleRecordingRef.current = toggleRecording;
+	}, [
+		recordingPrefsLoaded,
+		cameraDevicesReady,
+		micDevicesReady,
+		microphoneEnabled,
+		webcamEnabled,
+		toggleRecording,
+	]);
+	const startWhenDevicesReady = useCallback(() => {
+		if (startWhenDevicesReadyInFlight.current) {
+			return startWhenDevicesReadyInFlight.current;
+		}
+		let settle!: () => void;
+		const pending = new Promise<void>((resolve) => {
+			settle = resolve;
+		});
+		startWhenDevicesReadyInFlight.current = pending;
+		void (async () => {
+			try {
+				for (let attempt = 0; attempt < 100; attempt++) {
+					const ready = deviceReadinessRef.current;
+					if (
+						ready.recordingPrefsLoaded &&
+						(!ready.webcamEnabled || ready.cameraDevicesReady) &&
+						(!ready.microphoneEnabled || ready.micDevicesReady)
+					) {
+						toggleRecordingRef.current();
+						return;
+					}
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				}
+				console.warn("Recording did not start because device preferences could not be resolved.");
+			} finally {
+				if (startWhenDevicesReadyInFlight.current === pending) {
+					startWhenDevicesReadyInFlight.current = null;
+				}
+				settle();
+			}
+		})();
+		return pending;
+	}, []);
 
 	// The main process pushes every change through `onSelectedSourceChanged`, so
 	// this only needs one read to seed the initial value (plus one on focus, in
@@ -577,7 +704,7 @@ export function LaunchWindow() {
 			}
 
 			recordAfterSourceSelectionRef.current = false;
-			toggleRecording();
+			void startWhenDevicesReady();
 		});
 		const cleanupSelectorClosed = window.electronAPI?.onSourceSelectorClosed?.(() => {
 			recordAfterSourceSelectionRef.current = false;
@@ -587,7 +714,7 @@ export function LaunchWindow() {
 			cleanupSourceChanged?.();
 			cleanupSelectorClosed?.();
 		};
-	}, [applySelectedSource, recording, toggleRecording]);
+	}, [applySelectedSource, recording, startWhenDevicesReady]);
 
 	const openSourceSelector = useCallback(async () => {
 		if (window.electronAPI) {
@@ -603,6 +730,10 @@ export function LaunchWindow() {
 	const handleRecordButtonClick = useCallback(
 		(sourceSelectedOverride?: boolean) => {
 			if (saving) {
+				return;
+			}
+			if (recording) {
+				toggleRecording();
 				return;
 			}
 			// Linux never detours through the in-app picker: there is nothing for
@@ -625,7 +756,7 @@ export function LaunchWindow() {
 						// all. Honouring the refusal starts the recording instead,
 						// whatever the local state has caught up to.
 						if (result.reason === "portal-owns-selection" && !recording) {
-							toggleRecording();
+							void startWhenDevicesReady();
 						}
 					})
 					.catch(() => {
@@ -634,9 +765,17 @@ export function LaunchWindow() {
 				return;
 			}
 
-			toggleRecording();
+			void startWhenDevicesReady();
 		},
-		[hasSelectedSource, portalOwnsSource, openSourceSelector, recording, saving, toggleRecording],
+		[
+			hasSelectedSource,
+			portalOwnsSource,
+			openSourceSelector,
+			recording,
+			saving,
+			startWhenDevicesReady,
+			toggleRecording,
+		],
 	);
 	const handleRecordClick = useCallback(() => handleRecordButtonClick(), [handleRecordButtonClick]);
 
@@ -693,37 +832,23 @@ export function LaunchWindow() {
 		});
 	}, [closePopovers]);
 
-	const toggleSystemAudio = useCallback(() => {
-		if (controlsLocked) return;
-		setSystemAudioEnabled(!systemAudioEnabled);
-	}, [controlsLocked, setSystemAudioEnabled, systemAudioEnabled]);
-
-	const toggleCursorMode = useCallback(() => {
-		if (controlsLocked) return;
-		setCursorCaptureMode(cursorCaptureMode === "editable-overlay" ? "system" : "editable-overlay");
-	}, [controlsLocked, cursorCaptureMode, setCursorCaptureMode]);
-
-	const toggleMicrophone = useCallback(() => {
-		if (controlsLocked) return;
-		setMicrophoneEnabled(!microphoneEnabled);
-	}, [controlsLocked, microphoneEnabled, setMicrophoneEnabled]);
-
 	/**
-	 * Write a camera choice back to the main-process recording prefs.
+	 * Write a recording preference back to the main-process session store.
 	 *
-	 * The HUD used to be a reader of that SSOT and never a writer, while being
-	 * destroyed and rebuilt for every recording — so a camera picked here lived
-	 * exactly as long as one take, and the editor's Rec stage kept showing the
-	 * previous device. Best-effort on purpose: failing to persist a preference
-	 * must not stop a recording.
+	 * The HUD is destroyed and rebuilt for every recording, so toggles and device
+	 * choices need to share the same best-effort persistence path. Failing to
+	 * persist a preference must not stop a recording.
 	 */
 	const persistRecordingPrefs = useCallback(
 		(patch: {
 			camEnabled?: boolean;
 			camDeviceId?: string;
+			camDeviceName?: string;
+			micEnabled?: boolean;
 			micDeviceId?: string;
 			micDeviceName?: string;
-			autoZoomEnabled?: boolean;
+			systemAudioEnabled?: boolean;
+			cursorCaptureMode?: "editable-overlay" | "system";
 		}) => {
 			void window.electronAPI?.setRecordingPrefs?.(patch).catch((error) => {
 				console.warn("Failed to persist the device preference:", error);
@@ -732,20 +857,26 @@ export function LaunchWindow() {
 		[],
 	);
 
-	const systemCursorLocksAutoZoom = cursorCaptureMode === "system";
-	const toggleAutoZoom = useCallback(() => {
+	const toggleSystemAudio = useCallback(() => {
 		if (controlsLocked) return;
-		if (systemCursorLocksAutoZoom) return;
-		const next = !autoZoomEnabled;
-		setAutoZoomEnabled(next);
-		persistRecordingPrefs({ autoZoomEnabled: next });
-	}, [
-		autoZoomEnabled,
-		controlsLocked,
-		persistRecordingPrefs,
-		setAutoZoomEnabled,
-		systemCursorLocksAutoZoom,
-	]);
+		const next = !systemAudioEnabled;
+		setSystemAudioEnabled(next);
+		persistRecordingPrefs({ systemAudioEnabled: next });
+	}, [controlsLocked, persistRecordingPrefs, setSystemAudioEnabled, systemAudioEnabled]);
+
+	const toggleCursorMode = useCallback(() => {
+		if (controlsLocked) return;
+		const next = cursorCaptureMode === "editable-overlay" ? "system" : "editable-overlay";
+		setCursorCaptureMode(next);
+		persistRecordingPrefs({ cursorCaptureMode: next });
+	}, [controlsLocked, cursorCaptureMode, persistRecordingPrefs, setCursorCaptureMode]);
+
+	const toggleMicrophone = useCallback(() => {
+		if (controlsLocked) return;
+		const next = !microphoneEnabled;
+		setMicrophoneEnabled(next);
+		persistRecordingPrefs({ micEnabled: next });
+	}, [controlsLocked, microphoneEnabled, persistRecordingPrefs, setMicrophoneEnabled]);
 
 	const toggleWebcam = useCallback(() => {
 		if (controlsLocked) return;
@@ -773,7 +904,7 @@ export function LaunchWindow() {
 			setSelectedCameraId(device.deviceId);
 			setWebcamDeviceId(device.deviceId);
 			setWebcamDeviceName(device.label);
-			persistRecordingPrefs({ camDeviceId: device.deviceId });
+			persistRecordingPrefs({ camDeviceId: device.deviceId, camDeviceName: device.label });
 		},
 		[persistRecordingPrefs, setSelectedCameraId, setWebcamDeviceId, setWebcamDeviceName],
 	);
@@ -1034,18 +1165,6 @@ export function LaunchWindow() {
 							onClick={toggleDeviceSettings}
 						/>
 					</div>
-					<HudAutoZoomButton
-						enabled={autoZoomEnabled && !systemCursorLocksAutoZoom}
-						disabled={controlsLocked || systemCursorLocksAutoZoom}
-						label={
-							systemCursorLocksAutoZoom
-								? t("autoZoom.needsEditableCursor")
-								: autoZoomEnabled
-									? t("autoZoom.disable")
-									: t("autoZoom.enable")
-						}
-						onClick={toggleAutoZoom}
-					/>
 					{supportsCursorModeToggle && (
 						<HudCursorButton
 							editableOverlay={cursorCaptureMode === "editable-overlay"}

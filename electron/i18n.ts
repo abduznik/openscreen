@@ -3,6 +3,10 @@
 
 import commonAr from "../src/i18n/locales/ar/common.json";
 import dialogsAr from "../src/i18n/locales/ar/dialogs.json";
+import commonCs from "../src/i18n/locales/cs/common.json";
+import dialogsCs from "../src/i18n/locales/cs/dialogs.json";
+import commonDe from "../src/i18n/locales/de/common.json";
+import dialogsDe from "../src/i18n/locales/de/dialogs.json";
 import commonEn from "../src/i18n/locales/en/common.json";
 import dialogsEn from "../src/i18n/locales/en/dialogs.json";
 import commonEs from "../src/i18n/locales/es/common.json";
@@ -31,6 +35,8 @@ import dialogsZhTw from "../src/i18n/locales/zh-TW/dialogs.json";
 type Locale =
 	| "en"
 	| "ar"
+	| "cs"
+	| "de"
 	| "es"
 	| "fr"
 	| "it"
@@ -48,6 +54,8 @@ type MessageMap = Record<string, unknown>;
 const messages: Record<Locale, Record<Namespace, MessageMap>> = {
 	en: { common: commonEn, dialogs: dialogsEn },
 	ar: { common: commonAr, dialogs: dialogsAr },
+	cs: { common: commonCs, dialogs: dialogsCs },
+	de: { common: commonDe, dialogs: dialogsDe },
 	es: { common: commonEs, dialogs: dialogsEs },
 	fr: { common: commonFr, dialogs: dialogsFr },
 	it: { common: commonIt, dialogs: dialogsIt },
@@ -67,6 +75,8 @@ export function setMainLocale(locale: string) {
 	if (
 		locale === "en" ||
 		locale === "ar" ||
+		locale === "cs" ||
+		locale === "de" ||
 		locale === "es" ||
 		locale === "fr" ||
 		locale === "it" ||

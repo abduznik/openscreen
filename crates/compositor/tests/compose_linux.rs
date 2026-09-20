@@ -660,7 +660,8 @@ fn compose_linux_flou_de_velocite_camera() {
 /// Trainee fantome du curseur (accumulation temporelle, pas un mode de shader).
 ///
 /// Le curseur traverse le cadre ; a `cursor.motionBlur = 1` `plan_cursor` rend
-/// 11 taps entre sa position d'il y a 8 frames (8/60 s) et sa position courante.
+/// 2 a 16 prises, ponderees vers la tete, entre sa position d'il y a UNE frame
+/// (1/60 s, l'obturateur borne depuis 34b2e5847) et sa position courante.
 /// On compare au meme rendu sans trainee : la seule difference possible etant le
 /// curseur, un exces de vert la ou le curseur N'EST PAS (mais est PASSE) est la
 /// signature de la trainee.
@@ -686,13 +687,15 @@ fn compose_linux_trainee_de_curseur() {
     let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
     let mut dec = Decoder::open(FIXTURE, &gpu).expect("Decoder::open");
 
-    // Piste : deplacement horizontal regulier cx 0,1 -> 0,9 en 0,4 s, a cy fixe.
-    // Assez rapide pour que les 8/60 s de recul de la trainee separent nettement
-    // les deux extremites (~256 px a 960 de large) : sans quoi la trainee se
-    // superpose au curseur lui-meme et on ne pourrait plus les distinguer.
+    // Piste : deplacement horizontal regulier cx 0,1 -> 0,9 en 0,1 s, a cy fixe.
+    // L'obturateur de la trainee est borne a UNE frame (`trail_dt = blur01 / FPS`
+    // dans `plan_cursor`, 1/60 s a flou 100 %), donc le curseur doit aller vite
+    // pour que la trainee separe nettement ses deux extremites : 8 cx/s donne
+    // ~128 px a 960 de large. Plus lent, la trainee se superpose au curseur
+    // lui-meme (51 px de cote) et on ne peut plus les distinguer.
     let mut samples = String::new();
     for k in 0..=8 {
-        let (ms, cx) = (k * 50, 0.1 + 0.1 * k as f32);
+        let (ms, cx) = (k as f32 * 12.5, 0.1 + 0.1 * k as f32);
         if k > 0 {
             samples.push(',');
         }
@@ -704,7 +707,7 @@ fn compose_linux_trainee_de_curseur() {
     std::fs::write(&track_path, format!(r#"{{"samples":[{samples}]}}"#)).expect("write track");
     let track = CursorTrack::load(track_path.to_str().unwrap(), 0.0, 2.0).expect("CursorTrack::load");
     comp.set_cursor(track);
-    comp.set_cursor_time(Some(0.35));
+    comp.set_cursor_time(Some(0.0875));
 
     let scene_of = |mblur: f32| {
         format!(
@@ -730,13 +733,15 @@ fn compose_linux_trainee_de_curseur() {
     write_ppm("compose_linux_cursor_trail_off", W, H, &sharp);
     write_ppm("compose_linux_cursor_trail_on", W, H, &trail);
 
-    // A t = 0,35 s le curseur est en cx 0,8 (x ~ 768 px) et 8/60 s plus tot en
-    // cx ~ 0,533 (x ~ 512 px) ; le sprite fait 51 px de cote a size 3 (34/1080
-    // de frame_min_px, x3), donc le curseur COURANT occupe x = 742..794. La
-    // fenetre ci-dessous couvre le milieu du trajet, franchement a sa gauche :
-    // sans trainee il n'y a rien du tout. La bande miroir est son reflet par
-    // rapport a l'axe horizontal de l'image (cy = 0,28 est hors de cet axe
-    // exprès), donc un `accum` composite a l'envers y atterrirait.
+    // A t = 0,0875 s le curseur est en cx 0,8 (x ~ 768 px) et une frame (1/60 s)
+    // plus tot en cx ~ 0,667 (x ~ 640 px) ; le sprite fait 51 px de cote a
+    // size 3 (34/1080 de frame_min_px, x3), donc le curseur COURANT occupe
+    // x = 742..794 et la copie la plus ancienne x = 614..666. La fenetre
+    // ci-dessous tient entre les deux (x = 670..738, y = 130..172 autour de
+    // cy = 0,28 soit y ~ 151) : sans trainee il n'y a rien du tout. La bande
+    // miroir est son reflet par rapport a l'axe horizontal de l'image (cy = 0,28
+    // est hors de cet axe expres), donc un `accum` composite a l'envers y
+    // atterrirait.
     let greener = |x0: u32, x1: u32, y0: u32, y1: u32| -> usize {
         let excess = |img: &[u8], i: usize| {
             img[i + 1] as i32 - (img[i] as i32).max(img[i + 2] as i32)
@@ -752,15 +757,17 @@ fn compose_linux_trainee_de_curseur() {
         }
         n
     };
-    let on_path = greener(530, 700, 130, 172);
-    let mirrored = greener(530, 700, 368, 410);
+    let on_path = greener(670, 738, 130, 172);
+    let mirrored = greener(670, 738, 368, 410);
     println!("compose_linux trainee curseur : sur le trajet={on_path} bande miroir={mirrored}");
 
-    // La fenetre fait 170x42 = 7140 px et la trainee la remplit entierement.
-    // Le seuil a 4000 laisse de la marge tout en refusant une trainee qui ne
-    // couvrirait qu'un bout du trajet.
+    // La fenetre fait 68x42 = 2856 px et la trainee la remplit entierement : les
+    // copies sont espacees de ~8,5 px (16 prises sur 128 px) pour un sprite de
+    // 51 px, et chaque pixel en recoit au moins cinq. Le seuil a 1700 laisse de
+    // la marge tout en refusant une trainee qui ne couvrirait qu'un bout du
+    // trajet.
     assert!(
-        on_path > 4000,
+        on_path > 1700,
         "pas de trainee au milieu du trajet ({on_path} px plus verts) — le curseur n'est dessine qu'a sa position courante"
     );
     assert!(
@@ -1592,4 +1599,114 @@ fn compose_linux_annotation_ancree_hors_zoom() {
              les annotations sont ancrees sur `s_dst` au lieu de `s_ann`"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Profondeur de champ du mode 8 (pendant Linux de `tilted_depth_of_field.rs`)
+// ---------------------------------------------------------------------------
+
+/// Nettete d'une fenetre `r`x`r` centree en `c` : moyenne des ecarts entre voisins (vert).
+fn dof_sharpness(rgba: &[u8], w: u32, c: (u32, u32), r: u32) -> f64 {
+    let g = |x: u32, y: u32| rgba[((y * w + x) * 4 + 1) as usize] as f64;
+    let (mut acc, mut n) = (0.0, 0.0);
+    for y in c.1 - r / 2..c.1 + r / 2 {
+        for x in c.0 - r / 2..c.0 + r / 2 {
+            acc += (g(x + 1, y) - g(x, y)).abs() + (g(x, y + 1) - g(x, y)).abs();
+            n += 1.0;
+        }
+    }
+    acc / n
+}
+
+/// Octets RGBA de la fenetre `r`x`r` centree en `c`.
+fn dof_window_bytes(rgba: &[u8], w: u32, c: (u32, u32), r: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    for y in c.1 - r / 2..c.1 + r / 2 {
+        let i = ((y * w + c.0 - r / 2) * 4) as usize;
+        out.extend_from_slice(&rgba[i..i + (r * 4) as usize]);
+    }
+    out
+}
+
+/// Coin du plan (hors fond magenta) extreme dans la direction `dir`, rentre de `inset`
+/// vers le centroide.
+fn dof_corner(rgba: &[u8], w: u32, h: u32, dir: (i64, i64), inset: f64) -> (u32, u32) {
+    let (mut best, mut at) = (i64::MIN, (0i64, 0i64));
+    let (mut sx, mut sy, mut n) = (0f64, 0f64, 0f64);
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            let i = ((y * w as i64 + x) * 4) as usize;
+            if !not_bg(&rgba[i..i + 4]) {
+                continue;
+            }
+            sx += x as f64;
+            sy += y as f64;
+            n += 1.0;
+            if x * dir.0 + y * dir.1 > best {
+                best = x * dir.0 + y * dir.1;
+                at = (x, y);
+            }
+        }
+    }
+    let x = at.0 as f64 + (sx / n - at.0 as f64) * inset;
+    let y = at.1 as f64 + (sy / n - at.1 as f64) * inset;
+    (x as u32, y as u32)
+}
+
+/// Golden par backend : iso, focus sur le coin proche. Le coin lointain perd son detail, le
+/// proche ne bouge pas d'un octet, et a plat le reglage ne change rien. Un `level(lod)` qui
+/// retomberait au niveau 0 (vue a un seul niveau, binding 4 mal lie) rendrait le lointain net.
+/// Source : `OPENSCREEN_DOF_SOURCE` (du texte de preference), sinon la fixture.
+#[test]
+fn compose_linux_profondeur_de_champ() {
+    let source = std::env::var("OPENSCREEN_DOF_SOURCE").unwrap_or_else(|_| FIXTURE.into());
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(&source).is_file() {
+        eprintln!("compose_linux dof: opt-in (OPENSCREEN_LINUX_COMPOSE=1 + source). Skip.");
+        return;
+    }
+    let (w, h) = (1920u32, 1080u32);
+    // `create_auto` : lavapipe (backend CPU) compte, et `DOF_ON_CPU_BACKEND` l'y laisse tourner.
+    let gpu = Gpu::create_auto(false).expect("Gpu::create_auto");
+    let comp = Compositor::new_sized(&gpu, w, h).expect("Compositor::new_sized");
+    let mut dec = Decoder::open(&source, &gpu).expect("Decoder::open");
+    let mut cfg = Cfg::c8();
+    cfg.shadow = false;
+    let scene = |rotation: &str, dof: bool| {
+        tilt_scene_json(rotation, 0, 0.0)
+            .replace(r#""motionBlur":0}"#, &format!(r#""motionBlur":0,"depthOfField":{dof}}}"#))
+            .replace(r#""focusX":0.5,"focusY":0.5"#, r#""focusX":0.94,"focusY":0.06"#)
+    };
+    let (on, off, flat_on, flat_off) = unsafe {
+        let sf = dec.seek_to(1.0).expect("Decoder::seek_to");
+        let render = |json: String| {
+            let scene = Scene::from_json(&json).expect("scene json");
+            comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&scene));
+            comp.set_scene(Some(scene));
+            comp.compose_frame(sf, sf, 90.0, &cfg).expect("compose_frame");
+            comp.readback_direct().expect("readback_direct").2
+        };
+        (
+            render(scene("\"iso\"", true)),
+            render(scene("\"iso\"", false)),
+            render(scene("null", true)),
+            render(scene("null", false)),
+        )
+    };
+    write_ppm("compose_linux_dof_on", w, h, &on);
+    write_ppm("compose_linux_dof_off", w, h, &off);
+    let r = 48;
+    let near = dof_corner(&off, w, h, (1, -1), 0.12);
+    let far = dof_corner(&off, w, h, (-1, 1), 0.12);
+    let (near_on, near_off) = (dof_sharpness(&on, w, near, r), dof_sharpness(&off, w, near, r));
+    let (far_on, far_off) = (dof_sharpness(&on, w, far, r), dof_sharpness(&off, w, far, r));
+    println!(
+        "compose_linux dof : proche {near_off:.2} -> {near_on:.2}, lointain {far_off:.2} -> {far_on:.2}"
+    );
+    assert!(far_off > 2.0, "fenetre lointaine sans detail ({far_off})");
+    assert!(
+        dof_window_bytes(&on, w, near, r) == dof_window_bytes(&off, w, near, r),
+        "coin proche modifie : {near_off} -> {near_on}"
+    );
+    assert!(far_on < far_off * 0.7, "coin lointain pas floute : {far_off} -> {far_on}");
+    assert!(flat_on == flat_off, "rotation nulle : la profondeur de champ a change la frame");
 }

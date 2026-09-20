@@ -151,6 +151,36 @@ const PILL_SNAP_PX = 8;
  *  clips that follow — which is what a flex `gap` did, once per junction. */
 /** Below this a clip cannot show a label and a delete button inside itself. */
 const NARROW_CLIP_PX = 120;
+// Whether a card can also carry its edited duration. The label pill is capped at
+// `calc(100% - 50px)` so it clears the delete button, and everything inside it
+// but the name is incompressible: 15px of pill padding (`3px 9px 3px 6px`), the
+// pencil and two 8px gaps — 47px. The timecode is the part that varies —
+// `formatSec` never prints an hour field, so a clip past ten minutes reads
+// `16:40.0` and one past a hundred `100:00.0` — so its width is measured with
+// canvas `measureText` in the face `.tlClipDuration` actually renders, rather
+// than guessed from a per-character average. Only where canvas is unavailable
+// (jsdom) does the gate fall back to the first cut's estimate: 6px per
+// character at 10px in the mono face.
+const CLIP_LABEL_RESERVE_PX = 50;
+const CLIP_LABEL_FIXED_PX = 47;
+const CLIP_LABEL_FALLBACK_CHAR_PX = 6;
+// `.tlClipDuration` renders `500 10px/1.2 var(--font-mono)`; canvas wants the
+// same face without the line height, so the family comes from the token itself.
+let durationMeasureCtx: CanvasRenderingContext2D | null | undefined;
+function durationTextPx(text: string): number | undefined {
+	if (durationMeasureCtx === undefined) {
+		durationMeasureCtx = document.createElement("canvas").getContext("2d");
+	}
+	const ctx = durationMeasureCtx;
+	if (ctx === null) return undefined;
+	const family = getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
+	ctx.font = `500 10px ${family || "monospace"}`;
+	return ctx.measureText(text).width;
+}
+function cardFitsDuration(cardPx: number, text: string): boolean {
+	const textPx = durationTextPx(text) ?? text.length * CLIP_LABEL_FALLBACK_CHAR_PX;
+	return cardPx >= CLIP_LABEL_RESERVE_PX + CLIP_LABEL_FIXED_PX + textPx;
+}
 
 const CLIP_GUTTER_PX = 6;
 /**
@@ -773,8 +803,6 @@ export function V4Timeline({
 				playheadElRef.current.style.left = `${pct * 100}%`;
 			}
 
-			// Optimistic local UI state update
-			setScrubbingTimeSec(targetTime);
 			pendingSeekTimeRef.current = targetTime;
 
 			if (isImmediate) {
@@ -782,15 +810,17 @@ export function V4Timeline({
 					cancelAnimationFrame(rafSeekRef.current);
 					rafSeekRef.current = 0;
 				}
+				setScrubbingTimeSec(targetTime);
 				setCurrentTime(targetTime);
 				return;
 			}
 
-			// Throttled store update / D3D seek via rAF to avoid IPC flooding
+			// Throttled React state + store update / D3D seek via rAF to avoid re-render and IPC floods.
 			if (rafSeekRef.current === 0) {
 				rafSeekRef.current = requestAnimationFrame(() => {
 					rafSeekRef.current = 0;
 					if (pendingSeekTimeRef.current !== null) {
+						setScrubbingTimeSec(pendingSeekTimeRef.current);
 						setCurrentTime(pendingSeekTimeRef.current);
 					}
 				});
@@ -2173,6 +2203,9 @@ export function V4Timeline({
 								// there is no arrangement that fits a button inside that — so while
 								// it is selected the controls step outside the box instead.
 								const narrow = boxLen * pxPerSec < NARROW_CLIP_PX;
+								// The gutter is taken out of the card's own width below, so the
+								// room the label actually has is that much less than the span.
+								const durText = formatSec(dur);
 								return (
 									<div
 										key={c.id}
@@ -2232,6 +2265,9 @@ export function V4Timeline({
 											<span className={styles.tlClipName}>
 												{tl.assets.find((a) => a.id === c.assetId)?.label ?? c.assetId}
 											</span>
+											{cardFitsDuration(boxLen * pxPerSec - CLIP_GUTTER_PX, durText) ? (
+												<span className={styles.tlClipDuration}>{durText}</span>
+											) : null}
 										</div>
 										{selected ? (
 											<button

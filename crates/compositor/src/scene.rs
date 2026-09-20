@@ -162,6 +162,88 @@ pub struct SceneEffects {
     pub roundness_frac: f32,
     /// 0..1 flou de mouvement.
     pub motion_blur: f32,
+    /// Cadre dessiné autour de l'enregistrement. `#[serde(default)]` : l'app omet la clé quand
+    /// il n'y en a pas, et tout payload d'avant le cadre se lit « sans cadre ».
+    #[serde(default)]
+    pub frame: SceneFrame,
+    /// Thème du cadre, clair ou sombre, pour TOUS les cadres — chrome de fenêtre comme appareils
+    /// modelés. `#[serde(default)]` = clair. Les anciennes valeurs `window-light` /
+    /// `window-dark` portaient le thème dans le cadre lui-même et continuent de le faire :
+    /// `SceneFrame::theme_override` les résout, ce champ est ignoré pour elles.
+    #[serde(default)]
+    pub frame_theme: SceneFrameTheme,
+    /// Réglage « Depth of field » : défocalise l'écran incliné selon sa profondeur (mode 8),
+    /// net au focus du zoom. Sans effet hors tilt. Allumé par défaut, clé absente comprise : il
+    /// ne s'applique qu'aux zooms inclinés, où il suit l'angle réel.
+    #[serde(default = "default_true")]
+    pub depth_of_field: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Le cadre autour de l'écran (`effects.frame` côté TS). Une valeur inconnue — un cadre ajouté
+/// par une version plus récente de l'app — retombe sur `None` au lieu de faire échouer toute la
+/// scène : l'enregistrement reste rendu, sans cadre.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SceneFrame {
+    /// Chrome de fenêtre : barre de titre, trois pastilles, filet. Dessiné à plat dans le plan de
+    /// l'écran (mode 14). Son thème vient de `SceneEffects::frame_theme`, comme celui des
+    /// appareils.
+    Window,
+    /// Les trois appareils, modelés en vraie 3D (mode 17) : un corps avec épaisseur, un
+    /// micro-chanfrein et une lunette, la face écran exactement sur le plan du métrage.
+    Laptop,
+    Phone,
+    /// Le moniteur de bureau (« Screen » dans le panneau).
+    Monitor,
+    /// Anciennes valeurs : le thème était dans le cadre. Un projet qui les porte encore doit
+    /// rendre exactement ce qu'il rendait, sans migration côté document — `theme_override` les
+    /// ramène au chrome de fenêtre plus le thème qu'elles nomment.
+    WindowLight,
+    WindowDark,
+    /// Dernier : serde n'accepte `other` que sur la dernière variante.
+    #[default]
+    #[serde(other)]
+    None,
+}
+
+/// Thème d'un cadre : la matière de la coque et du chrome. S'applique à TOUS les cadres.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SceneFrameTheme {
+    /// Argent / blanc, chrome clair.
+    #[default]
+    Light,
+    /// Graphite, chrome sombre. Dernier : `other` n'est accepté que sur la dernière variante.
+    #[serde(other)]
+    Dark,
+}
+
+impl SceneFrame {
+    /// Le cadre est-il un appareil modelé (mode 17) plutôt que le chrome plat (mode 14) ?
+    pub fn is_device(self) -> bool {
+        matches!(self, Self::Laptop | Self::Phone | Self::Monitor)
+    }
+
+    /// Le cadre effectivement dessiné : les anciennes valeurs se ramènent au chrome de fenêtre.
+    pub fn resolved(self) -> SceneFrame {
+        match self {
+            Self::WindowLight | Self::WindowDark => Self::Window,
+            other => other,
+        }
+    }
+
+    /// Le thème que le cadre impose de lui-même, `None` s'il suit `SceneEffects::frame_theme`.
+    pub fn theme_override(self) -> Option<SceneFrameTheme> {
+        match self {
+            Self::WindowLight => Some(SceneFrameTheme::Light),
+            Self::WindowDark => Some(SceneFrameTheme::Dark),
+            _ => None,
+        }
+    }
 }
 
 /// Fond derrière l'écran (parsé depuis `settings.wallpaper`).
@@ -173,8 +255,28 @@ pub enum SceneBackground {
         #[serde(rename = "angleDeg")]
         angle_deg: f32,
         stops: Vec<String>,
+        /// Absent pour un fond immobile : l'app n'émet la clé que si un mouvement est choisi,
+        /// donc la scène d'un projet sans animation ne bouge pas d'un octet.
+        #[serde(default)]
+        motion: GradientMotion,
     },
     Image { path: String },
+}
+
+/// Mouvement lent d'un fond dégradé (`settings.wallpaperMotion`), lu par le mode 5 dans `fx.w`.
+///
+/// Une valeur inconnue (projet ouvert par une version plus ancienne que celle qui l'a écrit)
+/// retombe sur `None` au lieu de faire échouer le parse de toute la scène.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GradientMotion {
+    Drift,
+    Aurora,
+    Waves,
+    // Dernier : serde n'accepte `other` que sur la dernière variante.
+    #[default]
+    #[serde(other)]
+    None,
 }
 
 /// Une annotation de la timeline (temps en secondes, source du clip).
@@ -183,6 +285,11 @@ pub enum SceneBackground {
 /// écran**, pas du cadre de sortie (le calque web reçoit `layout.screenRect` comme conteneur), et
 /// elles ne subissent **pas** le crop de zoom : l'overlay est frère de l'élément qui porte la
 /// transform, donc les annotations restent en place pendant que le contenu zoome dessous.
+///
+/// Exception : `kind: "blur"`. Un masque de confidentialité qui resterait en place laisserait
+/// sortir de dessous ce qu'il cache ; il suit donc le contenu sous le zoom et l'inclinaison 3D
+/// (`FrameGeometry::privacy_mask`). Les mêmes `x`/`y`/`w`/`h` désignent alors le contenu couvert
+/// au repos.
 ///
 /// `space: "frame"` change cette boîte de référence pour le **cadre de sortie**. Seuls les
 /// sous-titres l'envoient : une annotation est posée sur la vidéo visible et doit donc suivre le
@@ -236,10 +343,12 @@ impl SceneAnnotation {
     /// sur le rect écran immobiliserait le sous-titre tout en continuant de rétrécir ses lettres
     /// avec le curseur de padding.
     pub fn anchor_rect(&self, screen_dst: [f32; 4]) -> [f32; 4] {
-        match self.space.as_deref() {
-            Some("frame") => [0.0, 0.0, 1.0, 1.0],
-            _ => screen_dst,
-        }
+        if self.in_frame_space() { [0.0, 0.0, 1.0, 1.0] } else { screen_dst }
+    }
+
+    /// `true` pour une entrée mesurée sur le cadre de sortie (`space: "frame"`, les sous-titres).
+    pub fn in_frame_space(&self) -> bool {
+        self.space.as_deref() == Some("frame")
     }
 }
 
@@ -329,7 +438,10 @@ pub struct SceneZoomRegion {
     /// "manual" | "auto" (suit la télémétrie curseur) | null (= manual).
     #[serde(default)]
     pub focus_mode: Option<String>,
-    /// "iso" | "left" | "right" | null.
+    /// La caméra 3D du zoom : un angle fixe ("iso" | "left" | "right"), la caméra réelle qui
+    /// tourne autour de l'écran avec le pointeur ("follow-cursor", cf. `camera.rs`), ou null
+    /// (écran droit). Une valeur
+    /// inconnue rend l'écran droit.
     pub rotation: Option<String>,
     /// La région entière tombe sur une portion qu'un trim retire. Ses temps sont donc HORS de
     /// la fenêtre source de `clip_index`, qui n'est là que pour l'adresser (le segment que la
@@ -343,6 +455,14 @@ pub struct SceneZoomRegion {
     /// `#[serde(default)]` : absent de tout payload sans trim sous un modificateur (issue #216).
     #[serde(default)]
     pub under_trim: bool,
+    /// Masque le curseur pendant cette région de zoom.
+    #[serde(default)]
+    pub hide_cursor: bool,
+    /// Chaque clic enfonce le plan incliné (`regions::click_impact`). Sans effet hors préset
+    /// 3D : c'est le préset qui installe le plan que le clic fait basculer.
+    /// `#[serde(default)]` : l'app omet la clé quand elle est fausse.
+    #[serde(default)]
+    pub click_impact: bool,
 }
 
 /// Une zone de vitesse portée par le temps source d'un clip.
@@ -375,11 +495,19 @@ pub struct SceneCameraFullscreenRegion {
 #[serde(rename_all = "camelCase")]
 pub struct SceneCursor {
     pub show: bool,
+    /// Masque automatiquement le curseur après une période d'inactivité.
+    #[serde(default)]
+    pub auto_hide: bool,
     /// échelle directe (1 = défaut).
     pub size: f32,
     pub smoothing: f32,
     pub motion_blur: f32,
     pub click_bounce: f32,
+    /// Curseur MODÉLISÉ en 3D (mode 15) : le sprite de chaque état du thème par défaut, extrudé,
+    /// à la place du sprite plat. Les autres thèmes restent plats. `#[serde(default)]` : absent
+    /// des projets et des JSON écrits avant le réglage, qui gardent donc le curseur plat.
+    #[serde(default)]
+    pub model3d: bool,
     pub clip_to_bounds: bool,
     /// id du thème (jeu de sprites) — informatif ici : le natif consomme `cursor_sprites`.
     pub theme: String,
@@ -636,9 +764,10 @@ mod tests {
         assert!(scene.layout.webcam_mirror);
         assert!((scene.effects.roundness_frac - 0.0222).abs() < 1e-6);
         match scene.background {
-            SceneBackground::Gradient { angle_deg, ref stops } => {
+            SceneBackground::Gradient { angle_deg, ref stops, motion } => {
                 assert_eq!(angle_deg, 135.0);
                 assert_eq!(stops.len(), 2);
+                assert_eq!(motion, GradientMotion::None);
             }
             _ => panic!("expected gradient"),
         }
@@ -651,6 +780,58 @@ mod tests {
     }
 
     #[test]
+    fn the_frame_defaults_to_none_and_tolerates_an_unknown_value() {
+        let effects = |frame: &str| -> SceneEffects {
+            serde_json::from_str(&format!(
+                r#"{{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0{frame}}}"#
+            ))
+            .expect("parse effects")
+        };
+        assert_eq!(effects("").frame, SceneFrame::None);
+        assert_eq!(effects(r#","frame":"none""#).frame, SceneFrame::None);
+        assert_eq!(effects(r#","frame":"window""#).frame, SceneFrame::Window);
+        // Les trois appareils modelés (mode 17).
+        assert_eq!(effects(r#","frame":"laptop""#).frame, SceneFrame::Laptop);
+        assert_eq!(effects(r#","frame":"phone""#).frame, SceneFrame::Phone);
+        assert_eq!(effects(r#","frame":"monitor""#).frame, SceneFrame::Monitor);
+        // Un cadre d'une version plus récente de l'app : pas de cadre, mais la scène se lit.
+        assert_eq!(effects(r#","frame":"holo-visor""#).frame, SceneFrame::None);
+    }
+
+    /// Le thème est un réglage à part, qui vaut pour TOUS les cadres. Les deux anciennes valeurs
+    /// le portaient dans le cadre : elles se ramènent au chrome de fenêtre et imposent leur
+    /// thème, donc un projet qui n'a pas été migré rend encore ce qu'il rendait.
+    #[test]
+    fn the_frame_theme_is_its_own_setting_and_the_old_values_still_carry_theirs() {
+        let effects = |extra: &str| -> SceneEffects {
+            serde_json::from_str(&format!(
+                r#"{{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0{extra}}}"#
+            ))
+            .expect("parse effects")
+        };
+        assert_eq!(effects("").frame_theme, SceneFrameTheme::Light);
+        assert_eq!(effects(r#","frameTheme":"light""#).frame_theme, SceneFrameTheme::Light);
+        assert_eq!(effects(r#","frameTheme":"dark""#).frame_theme, SceneFrameTheme::Dark);
+        // Valeur inconnue : le thème sombre est la dernière variante, donc `other` y tombe. Ce
+        // n'est pas gênant — un thème inconnu n'existe pas, et la scène se lit.
+        assert_eq!(effects(r#","frameTheme":"neon""#).frame_theme, SceneFrameTheme::Dark);
+
+        for (value, theme) in
+            [("window-light", SceneFrameTheme::Light), ("window-dark", SceneFrameTheme::Dark)]
+        {
+            let e = effects(&format!(r#","frame":"{value}""#));
+            assert_eq!(e.frame.resolved(), SceneFrame::Window, "{value}");
+            assert_eq!(e.frame.theme_override(), Some(theme), "{value}");
+            // Et le thème du projet ne les touche pas : elles disent déjà le leur.
+            let forced = effects(&format!(r#","frame":"{value}","frameTheme":"dark""#));
+            assert_eq!(forced.frame.theme_override(), Some(theme), "{value} sous un thème forcé");
+        }
+        // Un cadre normal, lui, suit le réglage.
+        assert_eq!(effects(r#","frame":"window""#).frame.theme_override(), None);
+        assert_eq!(effects(r#","frame":"laptop""#).frame.theme_override(), None);
+    }
+
+    #[test]
     fn parses_color_and_image_backgrounds() {
         let color = r##"{"clips":[],"layout":{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0},"background":{"kind":"color","color":"#123456"},"zoomRegions":[],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"cropByClip":[],"output":{"width":1280,"height":720,"fps":30}}"##;
         let s = Scene::from_json(color).expect("parse color");
@@ -659,6 +840,20 @@ mod tests {
             _ => panic!("expected color"),
         }
         assert_eq!(s.output.fps, Some(30.0));
+    }
+
+    #[test]
+    fn gradient_motion_parses_and_tolerates_an_unknown_value() {
+        let motion_of = |json: &str| match serde_json::from_str::<SceneBackground>(json).expect("parse") {
+            SceneBackground::Gradient { motion, .. } => motion,
+            _ => panic!("expected gradient"),
+        };
+        let g = |m: &str| format!(r##"{{"kind":"gradient","angleDeg":90,"stops":["#000","#fff"]{m}}}"##);
+        assert_eq!(motion_of(&g("")), GradientMotion::None);
+        assert_eq!(motion_of(&g(r#","motion":"drift""#)), GradientMotion::Drift);
+        assert_eq!(motion_of(&g(r#","motion":"aurora""#)), GradientMotion::Aurora);
+        assert_eq!(motion_of(&g(r#","motion":"waves""#)), GradientMotion::Waves);
+        assert_eq!(motion_of(&g(r#","motion":"plasma""#)), GradientMotion::None);
     }
 
     #[test]

@@ -1,5 +1,11 @@
 {
 	"background": {
+		"motion": "Animazione",
+		"motionNone": "Nessuno",
+		"motionDrift": "Deriva",
+		"motionAurora": "Aurora",
+		"motionWaves": "Onde",
+		"motionGradientOnly": "L'animazione si applica solo agli sfondi sfumati. Scegli una sfumatura per animarla.",
 		"gradientLabel": "Sfumatura {{index}}",
 		"uploadCustom": "Carica personalizzato",
 		"unsupportedImage": "Immagine non supportata. Usa un file JPG o PNG.",
@@ -108,7 +114,47 @@
 		"format": "Formato",
 		"fitClip": "Adatta",
 		"motionBlur": "Sfocatura movimento",
-		"roundness": "Arrotondamento"
+		"depthOfField": "Profondità di campo",
+		"depthOfFieldHint": "Zoom 3D",
+		"depthOfFieldNoTilt": "Nessuno zoom 3D in questo progetto",
+		"roundness": "Arrotondamento",
+		"frameStyle": "Stile",
+		"windowNone": "Nessuna",
+		"frameWindow": "Finestra",
+		"frameLaptop": "Portatile",
+		"framePhone": "Telefono",
+		"frameScreen": "Schermo",
+		"frameTheme": "Tema",
+		"frameThemeLight": "Chiaro",
+		"frameThemeDark": "Scuro",
+		"frameThemeHelp": "Corpo argento con cornice chiara, o grafite con cornice scura. Vale per tutte le cornici.",
+		"windowHelp": "Disegna una finestra, o un dispositivo modellato in 3D, attorno alla registrazione.",
+		"roundnessFrameHelp": "L'intervallo si adatta alla cornice: 100 % è l'arrotondamento massimo che le sta bene."
+	},
+	"stylePresets": {
+		"button": "Preset",
+		"menuLabel": "Preset di stile",
+		"factoryName": "OpenScreen",
+		"factoryBadge": "Integrato",
+		"empty": "Nessun preset salvato",
+		"create": "Crea nuovo preset…",
+		"namePlaceholder": "Nome del preset",
+		"save": "Salva",
+		"moreActions": "Altre azioni per {{name}}",
+		"revealMac": "Mostra nel Finder",
+		"revealWindows": "Mostra in Esplora file",
+		"revealLinux": "Mostra nella cartella",
+		"rename": "Rinomina",
+		"update": "Aggiorna dal progetto corrente",
+		"delete": "Elimina",
+		"confirmDelete": "Eliminare «{{name}}»?",
+		"applied": "«{{name}}» applicato",
+		"saved": "Preset salvato",
+		"updated": "Preset aggiornato",
+		"nameRequired": "Inserisci un nome",
+		"nameTaken": "Esiste già un preset con questo nome",
+		"loadFailed": "Impossibile caricare i preset",
+		"saveFailed": "Impossibile salvare il preset: {{error}}"
 	},
 	"transcript": {
 		"laneRecording": "Registrazione",
@@ -298,19 +344,42 @@
 			"autoDescription": "La fotocamera segue la posizione del cursore registrato",
 			"title": "Modalità messa a fuoco"
 		},
-		"threeD": {
+		"camera": {
+			"title": "Camera 3D",
+			"off": "Disattivata",
+			"fixed": "Angolo fisso",
+			"moving": "Camera in movimento",
 			"preset": {
-				"left": "Sinistra",
-				"right": "Destra",
-				"iso": "Iso"
+				"iso": "Dall'alto di sbieco",
+				"left": "Schermo ruotato a sinistra",
+				"right": "Schermo ruotato a destra",
+				"followCursor": "Ruota con il cursore"
 			},
-			"none": "Nessuna",
-			"title": "Rotazione 3D"
+			"description": {
+				"off": "Lo schermo resta piatto.",
+				"iso": "Mantiene una sola posa: ruotato a sinistra e visto dall'alto.",
+				"left": "Mantiene una sola posa: lo schermo guarda a sinistra e il bordo destro avanza.",
+				"right": "Mantiene una sola posa: lo schermo guarda a destra e il bordo sinistro avanza.",
+				"followCursor": "Lo schermo resta fermo; la telecamera gli gira intorno dal lato del cursore e sale o scende con esso."
+			},
+			"needsCursor": "Il cursore è nascosto: questa telecamera non ha nulla da seguire e mantiene l'angolo iniziale."
+		},
+		"clickImpact": {
+			"title": "Impatto del clic",
+			"description": "Ogni clic preme lo schermo inclinato: il lato cliccato si abbassa, poi torna.",
+			"needsRotation": "Scegli prima una camera 3D: si può premere solo uno schermo inclinato.",
+			"needsCursor": "Il cursore è nascosto: lo schermo reagisce solo ai clic visibili.",
+			"descriptionCamera": "Ogni clic fa arretrare un po' la telecamera, che poi torna avanti."
 		},
 		"level": "Livello zoom",
 		"previewHold": "Tieni premuto per vedere l'anteprima dell'effetto zoom",
 		"customScale": "Zoom personalizzato",
-		"selectRegion": "Seleziona una regione zoom da regolare"
+		"selectRegion": "Seleziona una regione zoom da regolare",
+		"cursor": {
+			"title": "Cursore",
+			"show": "Visibile",
+			"hide": "Nascosto"
+		}
 	},
 	"audio": {
 		"outputGain": "Livello di uscita",
@@ -334,6 +403,9 @@
 	"cursor": {
 		"smoothing": "Smussatura",
 		"clickBounce": "Rimbalzo clic",
+		"model3d": "Cursore 3D",
+		"model3dHint": "Stile predefinito: tutte le forme del cursore diventano 3D. Gli altri stili restano piatti.",
+		"model3dNeedsCursor": "Attiva «Mostra cursore» per usare il cursore 3D.",
 		"help": "Resa del cursore dalla telemetria registrata: tema, dimensione, smussatura, sfocatura di movimento e rimbalzo al clic.",
 		"clipToBoundsDescription": "Mantiene il cursore all'interno del fotogramma video. Disattiva per lasciare che il cursore superi i bordi — utile quando si esegue zoom o panoramica.",
 		"size": "Dimensione",
@@ -342,7 +414,8 @@
 		"themeDefault": "Predefinito",
 		"clipToBounds": "Ritaglia al canvas",
 		"motionBlur": "Sfocatura movimento",
-		"theme": "Stile del cursore"
+		"theme": "Stile del cursore",
+		"autoHide": "Nascondi se inattivo"
 	},
 	"export": {
 		"gifButton": "Esporta GIF",

@@ -18,9 +18,9 @@ const defaults: RecordingPrefs = {
 	micDeviceName: null,
 	camEnabled: false,
 	camDeviceId: null,
+	camDeviceName: null,
 	systemAudioEnabled: false,
 	cursorCaptureMode: "editable-overlay",
-	autoZoomEnabled: true,
 };
 let dir: string;
 beforeEach(() => {
@@ -30,9 +30,12 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-function start(getWindow: () => BrowserWindow | null = () => null) {
+function start(
+	getWindow: () => BrowserWindow | null = () => null,
+	getAppWindows?: () => BrowserWindow[],
+) {
 	electron.handle.mockClear();
-	registerRecordingPrefsHandlers(defaults, getWindow);
+	registerRecordingPrefsHandlers(defaults, getWindow, getAppWindows);
 	const get = electron.handle.mock.calls.find(
 		([name]) => name === "get-recording-prefs",
 	)?.[1] as () => RecordingPrefs;
@@ -40,46 +43,74 @@ function start(getWindow: () => BrowserWindow | null = () => null) {
 		_event: unknown,
 		prefs: Partial<RecordingPrefs>,
 	) => RecordingPrefs;
-	return { get, set: (prefs: Partial<RecordingPrefs>) => set(undefined, prefs) };
+	return {
+		get,
+		set: (prefs: Partial<RecordingPrefs>) => set(undefined, prefs),
+	};
 }
 
 describe("recording preferences IPC", () => {
-	it("restores false on restart while device preferences reset", () => {
+	it("restores toggles and device preferences on restart", () => {
 		const first = start();
-		expect(first.get().autoZoomEnabled).toBe(true);
-		expect(first.set({ autoZoomEnabled: false }).autoZoomEnabled).toBe(false);
+		expect(first.get().micEnabled).toBe(false);
+		expect(first.get().camDeviceName).toBeNull();
+		expect(first.set({ camDeviceName: "Camera A" }).camDeviceName).toBe("Camera A");
 		first.set({ micEnabled: true, micDeviceId: "temporary-device" });
 		const disk = JSON.parse(readFileSync(path.join(dir, "recording-settings.json"), "utf8"));
-		expect(disk).toEqual({ autoZoomEnabled: false });
+		expect(disk).toMatchObject({
+			camDeviceName: "Camera A",
+			micEnabled: true,
+			micDeviceId: "temporary-device",
+		});
 		const restarted = start();
-		expect(restarted.get()).toEqual({ ...defaults, autoZoomEnabled: false });
-		restarted.set({ autoZoomEnabled: true });
-		expect(start().get().autoZoomEnabled).toBe(true);
+		expect(restarted.get()).toEqual({
+			...defaults,
+			camDeviceName: "Camera A",
+			micEnabled: true,
+			micDeviceId: "temporary-device",
+		});
+		restarted.set({ camDeviceName: "Camera B" });
+		expect(start().get().camDeviceName).toBe("Camera B");
 	});
 
-	it("broadcasts the saved value and tolerates an absent or destroyed window", () => {
-		const send = vi.fn();
-		const isDestroyed = vi.fn(() => false);
-		const window = { isDestroyed, webContents: { send } } as unknown as BrowserWindow;
-		const session = start(() => window);
-		const updated = session.set({ autoZoomEnabled: false });
-		expect(send).toHaveBeenCalledWith("recording-prefs-changed", updated);
-		isDestroyed.mockReturnValue(true);
-		session.set({ micEnabled: true });
-		expect(send).toHaveBeenCalledTimes(1);
+	it("broadcasts saved values to every live application window", () => {
+		const firstSend = vi.fn();
+		const secondSend = vi.fn();
+		const destroyedSend = vi.fn();
+		const first = {
+			isDestroyed: () => false,
+			webContents: { send: firstSend },
+		} as unknown as BrowserWindow;
+		const second = {
+			isDestroyed: () => false,
+			webContents: { send: secondSend },
+		} as unknown as BrowserWindow;
+		const destroyed = {
+			isDestroyed: () => true,
+			webContents: { send: destroyedSend },
+		} as unknown as BrowserWindow;
+		const session = start(
+			() => first,
+			() => [first, second, first, destroyed],
+		);
+		const updated = session.set({ micEnabled: true });
+		expect(firstSend).toHaveBeenCalledWith("recording-prefs-changed", updated);
+		expect(secondSend).toHaveBeenCalledWith("recording-prefs-changed", updated);
+		expect(firstSend).toHaveBeenCalledTimes(1);
+		expect(destroyedSend).not.toHaveBeenCalled();
 	});
 
 	it("does not publish an invalid or failed preference write", () => {
 		const session = start();
-		expect(() =>
-			session.set({ autoZoomEnabled: null } as unknown as Partial<RecordingPrefs>),
-		).toThrow(TypeError);
-		expect(session.get().autoZoomEnabled).toBe(true);
-		session.set({ autoZoomEnabled: false });
-		session.set({ autoZoomEnabled: undefined, camEnabled: true });
-		expect(session.get().autoZoomEnabled).toBe(false);
+		expect(() => session.set({ micEnabled: null } as unknown as Partial<RecordingPrefs>)).toThrow(
+			TypeError,
+		);
+		expect(session.get().micEnabled).toBe(false);
+		session.set({ micEnabled: true });
+		session.set({ micEnabled: undefined, camEnabled: true });
+		expect(session.get().micEnabled).toBe(true);
 		rmSync(dir, { recursive: true, force: true });
-		expect(() => session.set({ autoZoomEnabled: true })).toThrow();
-		expect(session.get().autoZoomEnabled).toBe(false);
+		expect(() => session.set({ micEnabled: false })).toThrow();
+		expect(session.get().micEnabled).toBe(true);
 	});
 });

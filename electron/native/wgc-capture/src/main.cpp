@@ -650,7 +650,13 @@ void readCaptureCommands(CaptureControl& control, const std::function<void(bool)
 
 } // namespace
 
-int main(int argc, char* argv[]) {
+// `wmain`, not `main`: the config JSON arrives on the command line, and a narrow
+// `argv` is transcoded by the CRT through the ANSI code page, not UTF-8. Every
+// non-ASCII character in the output path (a user name under AppData, a folder
+// name) came out as bytes `utf8ToWide` could not decode, so Media Foundation was
+// handed a directory that does not exist and failed with ERROR_PATH_NOT_FOUND
+// (0x80070003) before any encoder was involved (getopenscreen/openscreen#483).
+int wmain(int argc, wchar_t* argv[]) {
     // Before anything reads a coordinate. `findMonitorForCapture` matches the
     // config's display bounds against the rects `EnumDisplayMonitors` reports,
     // and the caller sends those bounds in physical pixels; a DPI-unaware
@@ -671,7 +677,7 @@ int main(int argc, char* argv[]) {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
 
     CaptureConfig config;
-    if (!parseConfig(argv[1], config)) {
+    if (!parseConfig(wideToUtf8(argv[1]), config)) {
         std::cerr << "ERROR: Failed to parse config JSON" << std::endl;
         return 1;
     }

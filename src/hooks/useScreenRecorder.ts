@@ -2,7 +2,7 @@ import { fixWebmDuration } from "@fix-webm-duration/fix";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
-import { MIC_GAIN_BOOST, mixAudioTracks } from "@/lib/audioMix";
+import { mixAudioTracks, nativeMicrophoneGain } from "@/lib/audioMix";
 import {
 	type NativeLinuxRecordingRequest,
 	portalOwnsSourceSelection,
@@ -106,10 +106,9 @@ type UseScreenRecorderReturn = {
 	setWebcamEnabled: (enabled: boolean) => Promise<boolean>;
 	cursorCaptureMode: CursorCaptureMode;
 	setCursorCaptureMode: (mode: CursorCaptureMode) => void;
-	autoZoomEnabled: boolean;
-	setAutoZoomEnabled: (enabled: boolean) => void;
 	softwareEncoderFallbackNoticeVisible: boolean;
 	dismissSoftwareEncoderFallbackNotice: (dontShowAgain?: boolean) => void;
+	recordingPrefsLoaded: boolean;
 };
 
 type NativeWindowsRecordingHandle = {
@@ -160,6 +159,17 @@ type NativeLinuxRecordingHandle = {
  * video in the camera's place. Rounding loses nothing: one frame at 60 fps is
  * 16.7 ms.
  */
+export function isRecoverableWebcamConstraintError(
+	error: unknown,
+	savedDeviceName?: string,
+): boolean {
+	if (!savedDeviceName) return false;
+	return (
+		error instanceof DOMException &&
+		["OverconstrainedError", "NotFoundError", "DevicesNotFoundError"].includes(error.name)
+	);
+}
+
 export function webcamOffsetMsFrom(
 	webcamRecorder: RecorderHandle | null,
 	webcamStartedAtMs: number | null,
@@ -244,42 +254,69 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const [systemAudioEnabled, setSystemAudioEnabled] = useState(false);
 	const [webcamEnabled, setWebcamEnabledState] = useState(false);
 	const [cursorCaptureMode, setCursorCaptureMode] = useState<CursorCaptureMode>("editable-overlay");
-	const [autoZoomEnabled, setAutoZoomEnabled] = useState(true);
 	const [softwareEncoderFallbackNoticeVisible, setSoftwareEncoderFallbackNoticeVisible] =
 		useState(false);
+	const [recordingPrefsLoaded, setRecordingPrefsLoaded] = useState(false);
 
 	// Seed from the main-process recording-prefs SSOT on mount, so choices
 	// made in the editor's Rec-mode stage (a different renderer window) carry
 	// over instead of this hook silently reverting to its own hardcoded
 	// defaults every time startNewRecording() switches to the HUD window.
+	// Later saves from any window arrive on the same channel; applying every field
+	// (including null devices) keeps a live HUD in step with them.
 	useEffect(() => {
 		let cancelled = false;
+		let receivedNewerSnapshot = false;
+		const applyPrefs = (prefs: {
+			micEnabled: boolean;
+			micDeviceId?: string | null;
+			micDeviceName?: string | null;
+			camEnabled: boolean;
+			camDeviceId?: string | null;
+			camDeviceName?: string | null;
+			systemAudioEnabled: boolean;
+			cursorCaptureMode: CursorCaptureMode;
+		}) => {
+			if (cancelled) return;
+			setMicrophoneEnabled(prefs.micEnabled);
+			setMicrophoneDeviceId(prefs.micDeviceId ?? undefined);
+			setMicrophoneDeviceName(prefs.micDeviceName ?? undefined);
+			const isCliRecord =
+				typeof window !== "undefined" &&
+				new URLSearchParams(window.location.search).get("windowType") === "cli-record";
+			if (!isCliRecord) {
+				setWebcamEnabledState(prefs.camEnabled);
+				setWebcamDeviceId(prefs.camDeviceId ?? undefined);
+				setWebcamDeviceName(prefs.camDeviceName ?? undefined);
+			}
+			setSystemAudioEnabled(prefs.systemAudioEnabled);
+			setCursorCaptureMode(prefs.cursorCaptureMode);
+			setRecordingPrefsLoaded(true);
+		};
+		const stop = window.electronAPI?.onRecordingPrefsChanged?.((prefs) => {
+			receivedNewerSnapshot = true;
+			applyPrefs(prefs);
+		});
 		void window.electronAPI
 			?.getRecordingPrefs?.()
 			.then((prefs) => {
-				if (cancelled || !prefs) return;
-				setMicrophoneEnabled(prefs.micEnabled);
-				if (prefs.micDeviceId) setMicrophoneDeviceId(prefs.micDeviceId);
-				// The name matters as much as the id: the native Windows helper picks
-				// the microphone by NAME, and falls back to the Windows default
-				// endpoint when it is empty. Seeding only the id left an auto-started
-				// recording racing this window's own device enumeration for it, and
-				// losing (getopenscreen/openscreen#404).
-				if (prefs.micDeviceName) setMicrophoneDeviceName(prefs.micDeviceName);
-				setWebcamEnabledState(prefs.camEnabled);
-				if (prefs.camDeviceId) setWebcamDeviceId(prefs.camDeviceId);
-				setSystemAudioEnabled(prefs.systemAudioEnabled);
-				setCursorCaptureMode(prefs.cursorCaptureMode);
-				setAutoZoomEnabled(prefs.autoZoomEnabled !== false);
+				if (cancelled || receivedNewerSnapshot) return;
+				if (!prefs) {
+					setRecordingPrefsLoaded(true);
+					return;
+				}
+				applyPrefs(prefs);
 			})
 			.catch((err) => {
 				// Bare ipcRenderer.invoke — rejects if the main handler throws. Falling
 				// back to this hook's own defaults is acceptable; an unhandled rejection
 				// on every HUD mount is not.
 				console.warn("Failed to seed the recording prefs:", err);
+				if (!cancelled && !receivedNewerSnapshot) setRecordingPrefsLoaded(true);
 			});
 		return () => {
 			cancelled = true;
+			stop?.();
 		};
 	}, []);
 
@@ -464,6 +501,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				webcamStream.current = stream;
 				webcamReady.current = true;
 			} catch (cameraError) {
+				if (isRecoverableWebcamConstraintError(cameraError, webcamDeviceName)) {
+					console.warn("Waiting to resolve the restored camera identity:", cameraError);
+					return;
+				}
 				if (!cancelled) {
 					console.warn("Failed to get webcam access:", cameraError);
 					setWebcamEnabledState(false);
@@ -494,7 +535,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				webcamStream.current = null;
 			}
 		};
-	}, [webcamEnabled, webcamDeviceId, t]);
+	}, [webcamEnabled, webcamDeviceId, webcamDeviceName, t]);
 
 	const finalizeRecording = useCallback(
 		(
@@ -1181,7 +1222,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 						enabled: microphoneEnabled,
 						deviceId: microphoneDeviceId,
 						deviceName: microphoneDeviceName,
-						gain: MIC_GAIN_BOOST,
+						// Boosted only when the mic has to sit over system audio.
+						gain: nativeMicrophoneGain(systemAudioEnabled),
 					},
 				},
 				webcam: {
@@ -1342,7 +1384,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 						enabled: microphoneEnabled,
 						deviceId: microphoneDeviceId,
 						deviceName: microphoneDeviceName,
-						gain: MIC_GAIN_BOOST,
+						// Boosted only over system audio, like the Windows request above.
+						gain: nativeMicrophoneGain(systemAudioEnabled),
 					},
 				},
 				webcam: {
@@ -1445,7 +1488,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				// microphone get the empty headphone jack recorded, because the
 				// helper then fell back to the session default source.
 				...(microphoneDeviceName ? { deviceName: microphoneDeviceName } : {}),
-				gain: MIC_GAIN_BOOST,
+				// Boosted only over system audio, like the Windows request above.
+				gain: nativeMicrophoneGain(systemAudioEnabled),
 			},
 		},
 		cursor: { mode: cursorCaptureMode },
@@ -2354,9 +2398,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		setWebcamEnabled,
 		cursorCaptureMode,
 		setCursorCaptureMode,
-		autoZoomEnabled,
-		setAutoZoomEnabled,
 		softwareEncoderFallbackNoticeVisible,
 		dismissSoftwareEncoderFallbackNotice,
+		recordingPrefsLoaded,
 	};
 }

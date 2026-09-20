@@ -6,7 +6,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
-import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
+import type {
+	AnnotationRegion,
+	AnnotationType,
+	Rotation3DPreset,
+} from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import {
 	collapseTracksToPills,
@@ -39,7 +43,7 @@ import {
 } from "../timeline/timelineMap";
 import { dropTrimPillsByIds, resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
-import { useProjectStore } from "./projectStore";
+import { useProjectStore, waitForDocumentSaves } from "./projectStore";
 
 // How long a region lasts when the caller doesn't say. The timeline's toolbar
 // passes its own duration instead, derived from the current zoom so the new pill
@@ -192,7 +196,13 @@ export function useTimeline() {
 				!probedAssetIdsRef.current.has(a.id),
 		);
 		if (missing.length === 0) return;
-		let cancelled = false;
+		// No cleanup cancels this. The effect re-runs on EVERY document change, and a fresh
+		// recording changes it several times while the probe is out (placeholder seed,
+		// measured duration, camera link, auto-zoom). A cancel dropped the result while the
+		// asset was already marked attempted, so nothing ever probed it again that session and
+		// the take was exported with no dims. The write below re-reads the store instead, and
+		// the project check is the only staleness that matters.
+		const originatingProjectId = document.project.id;
 		void (async () => {
 			type Dims = { width: number; height: number };
 			const probed: Record<string, { video?: Dims; camera?: Dims }> = {};
@@ -211,10 +221,18 @@ export function useTimeline() {
 				}
 				if (entry.video || entry.camera) probed[a.id] = entry;
 			}
-			if (cancelled || Object.keys(probed).length === 0) return;
+			if (Object.keys(probed).length === 0) return;
+			// The store only takes a document once its save returns, so a write still in flight
+			// (the fresh-recording auto-zooms, typically) is invisible here. Building on the store
+			// before it lands and saving after it would erase it. Wait it out; on a timeout,
+			// write nothing and let a later run probe again.
+			if ((await waitForDocumentSaves()) === "timeout") {
+				for (const id of Object.keys(probed)) probedAssetIdsRef.current.delete(id);
+				return;
+			}
 			// Re-read fresh state so a concurrent edit made while probing isn't stomped.
 			const current = useProjectStore.getState().document;
-			if (!current) return;
+			if (!current || current.project.id !== originatingProjectId) return;
 			// `history: false` — see the comment above: a backfill nobody asked for must
 			// not become the thing the next Ctrl+Z reverses.
 			await useProjectStore.getState().saveDocument(
@@ -237,9 +255,6 @@ export function useTimeline() {
 				{ history: false },
 			);
 		})();
-		return () => {
-			cancelled = true;
-		};
 	}, [document]);
 
 	// Backfill the real duration of imported audio assets (issue #350), the audio
@@ -713,7 +728,7 @@ export function useTimeline() {
 	// `undefined` clears the preset back to a flat frame; `migrate.ts` already drops the field
 	// when it is falsy, so absent and "no rotation" are the same state.
 	const updateZoomRotation = useCallback(
-		async (id: string, rotationPreset: "iso" | "left" | "right" | undefined) => {
+		async (id: string, rotationPreset: Rotation3DPreset | undefined) => {
 			if (!document) return;
 			const next: AxcutDocument = {
 				...document,
@@ -741,6 +756,36 @@ export function useTimeline() {
 				...document,
 				zoomRanges: patchPillById(document.zoomRanges, id, {
 					focusMode,
+				}) as AxcutDocument["zoomRanges"],
+			};
+			await saveDocument(next, { history: true });
+		},
+		[document, saveDocument],
+	);
+
+	const updateZoomHideCursor = useCallback(
+		async (id: string, hideCursor: boolean | undefined) => {
+			if (!document) return;
+			const next: AxcutDocument = {
+				...document,
+				zoomRanges: patchPillById(document.zoomRanges, id, {
+					hideCursor: hideCursor ? true : undefined,
+				}) as AxcutDocument["zoomRanges"],
+			};
+			await saveDocument(next, { history: true });
+		},
+		[document, saveDocument],
+	);
+
+	// Per-region, like the preset it animates. `undefined` rather than `false` so the document
+	// keeps omitting the key when the option is off.
+	const updateZoomClickImpact = useCallback(
+		async (id: string, clickImpact: boolean) => {
+			if (!document) return;
+			const next: AxcutDocument = {
+				...document,
+				zoomRanges: patchPillById(document.zoomRanges, id, {
+					clickImpact: clickImpact ? true : undefined,
 				}) as AxcutDocument["zoomRanges"],
 			};
 			await saveDocument(next, { history: true });
@@ -1496,6 +1541,8 @@ export function useTimeline() {
 		updateZoomDepth,
 		updateZoomRotation,
 		updateZoomFocusMode,
+		updateZoomHideCursor,
+		updateZoomClickImpact,
 		updateAnnotationSpan,
 		updateAnnotationLive,
 		commitAnnotationChange,
