@@ -1,6 +1,5 @@
 #include "wasapi_render_keepalive.h"
 
-#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -33,18 +32,26 @@ bool isFloatFormat(const WAVEFORMATEX* format) {
 
 constexpr double TwoPi = 2.0 * 3.14159265358979323846;
 
+// The minimum sample rate at which ToneFrequencyHz stays comfortably below
+// Nyquist. Below this, generating the tone at all would mean either aliasing it
+// into an audible range or silently picking a lower, audible frequency instead
+// -- both worse than not running the keep-alive at all, so start() refuses to
+// run rather than risk a perceptible tone.
+constexpr double MinSampleRateForTone = ToneFrequencyHz / 0.9 * 2.0;
+
 // Fills `frameCount` frames of `data` with a quiet sine tone at the format
 // described by `format`, starting at `phase` radians and returning the phase to
 // continue from on the next call, so the waveform stays continuous across
 // separate GetBuffer/ReleaseBuffer calls instead of clicking at each boundary.
+// Caller (start()) has already verified the sample rate supports ToneFrequencyHz
+// with margin, so this always uses it directly rather than silently degrading.
 double writeToneFrames(BYTE* data, UINT32 frameCount, const WAVEFORMATEX* format, double phase) {
-    // Keep comfortably below Nyquist regardless of the device's actual sample
-    // rate (typically 44.1/48kHz, but not guaranteed): a device reporting
-    // something unusually low would otherwise alias 19kHz down into an audible
-    // frequency instead of staying inaudible.
-    const double nyquist = format->nSamplesPerSec / 2.0;
-    const double toneFrequencyHz = std::min(ToneFrequencyHz, nyquist * 0.9);
-    const double phaseStep = TwoPi * toneFrequencyHz / format->nSamplesPerSec;
+    // Zeroed up front so an unsupported bit depth (anything but 16/32-bit) falls
+    // back to real silence for that packet instead of playing back GetBuffer's
+    // uninitialized memory.
+    std::memset(data, 0, static_cast<size_t>(frameCount) * format->nBlockAlign);
+
+    const double phaseStep = TwoPi * ToneFrequencyHz / format->nSamplesPerSec;
     const bool isFloat = isFloatFormat(format);
     const UINT16 bitsPerSample = format->wBitsPerSample;
 
@@ -70,7 +77,7 @@ double writeToneFrames(BYTE* data, UINT32 frameCount, const WAVEFORMATEX* format
                 const int32_t value = static_cast<int32_t>(sampleValue * 2147483647.0);
                 std::memcpy(sampleData, &value, sizeof(value));
             }
-            // Any other bit depth is left zeroed (silence for that sample) rather
+            // Any other bit depth is left zeroed (already cleared above) rather
             // than risking a malformed write -- this is a best-effort keep-alive,
             // not a guarantee of coverage for every possible device format.
         }
@@ -111,6 +118,14 @@ bool WasapiRenderKeepAlive::start() {
 
     hr = audioClient_->GetMixFormat(&mixFormat_);
     if (FAILED(hr) || !mixFormat_) {
+        return false;
+    }
+
+    if (mixFormat_->nSamplesPerSec < MinSampleRateForTone) {
+        // Generating the tone here would mean either aliasing 19kHz into an
+        // audible frequency or silently picking a lower, audible one -- both
+        // worse than not running the keep-alive at all. The caller already
+        // treats this as non-fatal to the recording.
         return false;
     }
 
