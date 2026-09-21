@@ -1,5 +1,6 @@
 #include "wasapi_render_keepalive.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -9,11 +10,14 @@
 namespace {
 
 constexpr REFERENCE_TIME BufferDurationHns = 10'000'000;
-// Quiet enough to be inaudible in any real listening scenario, loud enough to be
-// genuine, non-zero signal rather than something a downstream limiter/gate could
-// treat as silence.
-constexpr double ToneAmplitude = 0.01;
-constexpr double ToneFrequencyHz = 1000.0;
+// A 1kHz tone at 1% amplitude was clearly audible in testing -- 1kHz sits right
+// in the most sensitive part of human hearing, so "quiet" in raw amplitude terms
+// was still loud in perceived loudness. 19kHz is above what the large majority of
+// adults can hear at all (upper hearing limit typically drops well below 20kHz
+// with age), so the actual amplitude can afford to be smaller still and remain
+// robustly non-silent to the audio engine.
+constexpr double ToneAmplitude = 0.003;
+constexpr double ToneFrequencyHz = 19000.0;
 
 bool isFloatFormat(const WAVEFORMATEX* format) {
     if (format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
@@ -34,7 +38,13 @@ constexpr double TwoPi = 2.0 * 3.14159265358979323846;
 // continue from on the next call, so the waveform stays continuous across
 // separate GetBuffer/ReleaseBuffer calls instead of clicking at each boundary.
 double writeToneFrames(BYTE* data, UINT32 frameCount, const WAVEFORMATEX* format, double phase) {
-    const double phaseStep = TwoPi * ToneFrequencyHz / format->nSamplesPerSec;
+    // Keep comfortably below Nyquist regardless of the device's actual sample
+    // rate (typically 44.1/48kHz, but not guaranteed): a device reporting
+    // something unusually low would otherwise alias 19kHz down into an audible
+    // frequency instead of staying inaudible.
+    const double nyquist = format->nSamplesPerSec / 2.0;
+    const double toneFrequencyHz = std::min(ToneFrequencyHz, nyquist * 0.9);
+    const double phaseStep = TwoPi * toneFrequencyHz / format->nSamplesPerSec;
     const bool isFloat = isFloatFormat(format);
     const UINT16 bitsPerSample = format->wBitsPerSample;
 

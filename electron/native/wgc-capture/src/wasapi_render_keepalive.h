@@ -20,10 +20,16 @@
 // reads real audio, when something is playing) prevents the drop but mic-only
 // capture (which touches nothing) does not -- some headsets' firmware appears to
 // require genuine signal, not merely a live but silent stream, to register as
-// activity. The tone amplitude is low enough (1%) to be inaudible in practice and
-// is never captured into the recording itself, since this writes to the render
-// endpoint and the recording only captures it when system-audio (loopback) is
-// also on -- the same case that already doesn't need this workaround.
+// activity.
+//
+// A first attempt at 1kHz / 1% amplitude was clearly audible in testing -- 1kHz
+// sits in the most sensitive part of human hearing, so "quiet" in raw amplitude
+// terms was still perceptibly loud. The tone is now 19kHz (above what the large
+// majority of adults can hear at all) at 0.3% amplitude, adapted downward if the
+// device's actual sample rate can't represent 19kHz cleanly. It is never captured
+// into the recording itself, since this writes to the render endpoint and the
+// recording only captures it when system-audio (loopback) is also on -- the same
+// case that already doesn't need this workaround.
 //
 // Kill-switch: set OPENSCREEN_WGC_DISABLE_AUDIO_KEEPALIVE=1 to turn this off.
 
