@@ -812,15 +812,16 @@ int wmain(int argc, wchar_t* argv[]) {
         }
     };
     // getopenscreen/openscreen#724: confirmed on real hardware that a mic-only
-    // recording lets Windows idle the render endpoint and drop the headset, while
+    // recording lets a wireless headset's own idle timer fire and drop it, while
     // the same recording with system audio (which reads the render endpoint via
-    // loopback) does not -- so writing silence to it is enough to prevent this.
-    // Independent of captureSystemAudio, since mic-only is exactly the case that
-    // otherwise leaves the endpoint untouched. Non-fatal: a recording with no
-    // output device to keep alive, or one where another app holds it exclusively,
-    // is unaffected either way.
+    // loopback) does not. Only needed when system audio is off: loopback capture
+    // already keeps the endpoint busy with real content on its own, so running
+    // this alongside it would be redundant and would additionally get captured
+    // into the recording's system-audio track, which mic-only never touches.
+    // Non-fatal: a recording with no output device to keep alive, or one where
+    // another app holds it exclusively, is unaffected either way.
     const bool renderKeepAliveEnabled =
-        readEnvInt("OPENSCREEN_WGC_DISABLE_AUDIO_KEEPALIVE", 0) != 1;
+        !config.captureSystemAudio && readEnvInt("OPENSCREEN_WGC_DISABLE_AUDIO_KEEPALIVE", 0) != 1;
     WasapiRenderKeepAlive renderKeepAlive;
     bool renderKeepAliveActive = false;
     const auto stopRenderKeepAliveIfActive = [&]() {

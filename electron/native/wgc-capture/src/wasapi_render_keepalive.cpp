@@ -1,11 +1,73 @@
 #include "wasapi_render_keepalive.h"
 
 #include <chrono>
+#include <cmath>
+#include <cstring>
 #include <iostream>
+#include <ksmedia.h>
 
 namespace {
 
 constexpr REFERENCE_TIME BufferDurationHns = 10'000'000;
+// Quiet enough to be inaudible in any real listening scenario, loud enough to be
+// genuine, non-zero signal rather than something a downstream limiter/gate could
+// treat as silence.
+constexpr double ToneAmplitude = 0.01;
+constexpr double ToneFrequencyHz = 1000.0;
+
+bool isFloatFormat(const WAVEFORMATEX* format) {
+    if (format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
+        return true;
+    }
+    if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+        format->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
+        const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
+        return extensible->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+    }
+    return false;
+}
+
+constexpr double TwoPi = 2.0 * 3.14159265358979323846;
+
+// Fills `frameCount` frames of `data` with a quiet sine tone at the format
+// described by `format`, starting at `phase` radians and returning the phase to
+// continue from on the next call, so the waveform stays continuous across
+// separate GetBuffer/ReleaseBuffer calls instead of clicking at each boundary.
+double writeToneFrames(BYTE* data, UINT32 frameCount, const WAVEFORMATEX* format, double phase) {
+    const double phaseStep = TwoPi * ToneFrequencyHz / format->nSamplesPerSec;
+    const bool isFloat = isFloatFormat(format);
+    const UINT16 bitsPerSample = format->wBitsPerSample;
+
+    for (UINT32 frame = 0; frame < frameCount; ++frame) {
+        const double sampleValue = std::sin(phase) * ToneAmplitude;
+        phase += phaseStep;
+        if (phase >= TwoPi) {
+            // Wrap rather than let phase grow unboundedly over a long recording,
+            // which would eventually lose precision in the sine's argument.
+            phase -= TwoPi;
+        }
+
+        for (UINT16 channel = 0; channel < format->nChannels; ++channel) {
+            BYTE* sampleData = data + frame * format->nBlockAlign + channel * (bitsPerSample / 8);
+            if (isFloat && bitsPerSample == 32) {
+                const float value = static_cast<float>(sampleValue);
+                std::memcpy(sampleData, &value, sizeof(value));
+            } else if (bitsPerSample == 16) {
+                const int16_t value = static_cast<int16_t>(sampleValue * 32767.0);
+                std::memcpy(sampleData, &value, sizeof(value));
+            } else if (bitsPerSample == 32) {
+                // 32-bit integer PCM.
+                const int32_t value = static_cast<int32_t>(sampleValue * 2147483647.0);
+                std::memcpy(sampleData, &value, sizeof(value));
+            }
+            // Any other bit depth is left zeroed (silence for that sample) rather
+            // than risking a malformed write -- this is a best-effort keep-alive,
+            // not a guarantee of coverage for every possible device format.
+        }
+    }
+
+    return phase;
+}
 
 } // namespace
 
@@ -61,14 +123,15 @@ bool WasapiRenderKeepAlive::start() {
         return false;
     }
 
-    // Prime the full buffer with silence before Start() so there's no gap for the
+    // Prime the full buffer with the tone before Start() so there's no gap for the
     // audio engine to glitch on.
     BYTE* data = nullptr;
     hr = renderClient_->GetBuffer(bufferFrameCount_, &data);
     if (FAILED(hr)) {
         return false;
     }
-    renderClient_->ReleaseBuffer(bufferFrameCount_, AUDCLNT_BUFFERFLAGS_SILENT);
+    tonePhase_ = writeToneFrames(data, bufferFrameCount_, mixFormat_, tonePhase_);
+    renderClient_->ReleaseBuffer(bufferFrameCount_, 0);
 
     stopRequested_ = false;
     hr = audioClient_->Start();
@@ -114,7 +177,8 @@ void WasapiRenderKeepAlive::renderLoop() {
         if (framesAvailable > 0) {
             BYTE* data = nullptr;
             if (SUCCEEDED(renderClient_->GetBuffer(framesAvailable, &data))) {
-                renderClient_->ReleaseBuffer(framesAvailable, AUDCLNT_BUFFERFLAGS_SILENT);
+                tonePhase_ = writeToneFrames(data, framesAvailable, mixFormat_, tonePhase_);
+                renderClient_->ReleaseBuffer(framesAvailable, 0);
             }
         }
 
