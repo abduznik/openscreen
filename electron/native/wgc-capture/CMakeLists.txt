@@ -50,6 +50,8 @@ add_executable(wgc-capture
   src/wasapi_device_watcher.h
   src/wasapi_loopback_capture.cpp
   src/wasapi_loopback_capture.h
+  src/wasapi_render_keepalive.cpp
+  src/wasapi_render_keepalive.h
   src/webcam_capture.cpp
   src/webcam_capture.h
   src/wgc_session.cpp
