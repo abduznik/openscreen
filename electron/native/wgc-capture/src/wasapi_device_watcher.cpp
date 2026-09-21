@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdio>
 #include <iostream>
+#include <sstream>
 
 namespace {
 
@@ -63,12 +64,15 @@ int64_t nowUnixMillis() {
         .count();
 }
 
-std::wstring friendlyNameForDevice(IMMDeviceEnumerator* enumerator, LPCWSTR deviceId) {
-    if (!enumerator || !deviceId) {
+// Only ever called from the worker thread or from start() (before the worker
+// exists), never from an IMMNotificationClient callback -- this does a property
+// store round trip and must not run on the callback thread.
+std::wstring friendlyNameForDevice(IMMDeviceEnumerator* enumerator, const std::wstring& deviceId) {
+    if (!enumerator || deviceId.empty()) {
         return {};
     }
     Microsoft::WRL::ComPtr<IMMDevice> device;
-    if (FAILED(enumerator->GetDevice(deviceId, &device)) || !device) {
+    if (FAILED(enumerator->GetDevice(deviceId.c_str(), &device)) || !device) {
         return {};
     }
     Microsoft::WRL::ComPtr<IPropertyStore> properties;
@@ -110,8 +114,13 @@ bool WasapiDeviceWatcher::start() {
     }
     registered_ = true;
 
-    emitBaseline(eRender, L"render");
-    emitBaseline(eCapture, L"capture");
+    workerStopRequested_ = false;
+    worker_ = std::thread([this] {
+        workerLoop();
+    });
+
+    enqueueBaseline(eRender, L"render");
+    enqueueBaseline(eCapture, L"capture");
     return true;
 }
 
@@ -121,11 +130,58 @@ void WasapiDeviceWatcher::stop() {
     }
     registered_ = false;
     deviceEnumerator_.Reset();
+
+    if (worker_.joinable()) {
+        {
+            std::lock_guard<std::mutex> lock(queueMutex_);
+            workerStopRequested_ = true;
+        }
+        queueCv_.notify_one();
+        worker_.join();
+    }
 }
 
-void WasapiDeviceWatcher::emitBaseline(EDataFlow flow, const wchar_t* flowLabel) {
+void WasapiDeviceWatcher::workerLoop() {
+    // This thread owns all name resolution and all std::cout writes for this
+    // watcher, so nothing here runs on an IMMNotificationClient callback thread.
+    while (true) {
+        PendingEvent event;
+        {
+            std::unique_lock<std::mutex> lock(queueMutex_);
+            queueCv_.wait(lock, [this] { return !queue_.empty() || workerStopRequested_; });
+            if (queue_.empty()) {
+                if (workerStopRequested_) {
+                    return;
+                }
+                continue;
+            }
+            event = std::move(queue_.front());
+            queue_.pop();
+        }
+
+        if (event.needsBaselineLookup) {
+            writeBaseline(event);
+        } else {
+            writeDeviceEvent(event);
+        }
+    }
+}
+
+void WasapiDeviceWatcher::enqueueBaseline(EDataFlow flow, const wchar_t* flowLabel) {
+    PendingEvent event;
+    event.needsBaselineLookup = true;
+    event.baselineFlow = flow;
+    event.baselineFlowLabel = flowLabel;
+    {
+        std::lock_guard<std::mutex> lock(queueMutex_);
+        queue_.push(std::move(event));
+    }
+    queueCv_.notify_one();
+}
+
+void WasapiDeviceWatcher::writeBaseline(const PendingEvent& event) {
     Microsoft::WRL::ComPtr<IMMDevice> device;
-    HRESULT hr = deviceEnumerator_->GetDefaultAudioEndpoint(flow, eConsole, &device);
+    HRESULT hr = deviceEnumerator_->GetDefaultAudioEndpoint(event.baselineFlow, eConsole, &device);
     if (FAILED(hr) || !device) {
         return;
     }
@@ -139,29 +195,49 @@ void WasapiDeviceWatcher::emitBaseline(EDataFlow flow, const wchar_t* flowLabel)
 
     DWORD state = 0;
     device->GetState(&state);
-    const std::wstring name = friendlyNameForDevice(deviceEnumerator_.Get(), id.c_str());
+    const std::wstring name = friendlyNameForDevice(deviceEnumerator_.Get(), id);
+
+    // Built as one complete string before the write, and written with a single
+    // stream operation under outputMutex_, so main.cpp's own JSON writes can't
+    // land in the middle of this line.
+    std::ostringstream line;
+    line << "{\"event\":\"audio-device-watch\",\"schemaVersion\":1,\"type\":\"baseline\","
+            "\"flow\":\""
+         << wideToUtf8(event.baselineFlowLabel) << "\",\"deviceId\":\"" << jsonEscape(wideToUtf8(id))
+         << "\",\"deviceName\":\"" << jsonEscape(wideToUtf8(name)) << "\",\"state\":\""
+         << deviceStateLabel(state) << "\",\"timestampMs\":" << nowUnixMillis() << "}\n";
 
     std::lock_guard<std::mutex> lock(outputMutex_);
-    std::cout << "{\"event\":\"audio-device-watch\",\"schemaVersion\":1,\"type\":\"baseline\","
-                 "\"flow\":\""
-              << wideToUtf8(flowLabel) << "\",\"deviceId\":\"" << jsonEscape(wideToUtf8(id))
-              << "\",\"deviceName\":\"" << jsonEscape(wideToUtf8(name)) << "\",\"state\":\""
-              << deviceStateLabel(state) << "\",\"timestampMs\":" << nowUnixMillis() << "}"
-              << std::endl;
+    std::cout << line.str() << std::flush;
 }
 
-void WasapiDeviceWatcher::emitDeviceEvent(const wchar_t* eventName, LPCWSTR deviceId, const char* extraJson) {
-    const std::wstring name = friendlyNameForDevice(deviceEnumerator_.Get(), deviceId);
+void WasapiDeviceWatcher::enqueue(const wchar_t* eventName, LPCWSTR deviceId, const char* extraJson) {
+    PendingEvent event;
+    event.eventName = eventName ? eventName : L"";
+    event.deviceId = deviceId ? deviceId : L"";
+    event.extraJson = extraJson ? extraJson : "";
+    {
+        std::lock_guard<std::mutex> lock(queueMutex_);
+        queue_.push(std::move(event));
+    }
+    queueCv_.notify_one();
+}
+
+void WasapiDeviceWatcher::writeDeviceEvent(const PendingEvent& event) {
+    const std::wstring name = friendlyNameForDevice(deviceEnumerator_.Get(), event.deviceId);
+
+    std::ostringstream line;
+    line << "{\"event\":\"audio-device-watch\",\"schemaVersion\":1,\"type\":\""
+         << wideToUtf8(event.eventName) << "\",\"deviceId\":\""
+         << jsonEscape(wideToUtf8(event.deviceId)) << "\",\"deviceName\":\""
+         << jsonEscape(wideToUtf8(name)) << "\"";
+    if (!event.extraJson.empty()) {
+        line << "," << event.extraJson;
+    }
+    line << ",\"timestampMs\":" << nowUnixMillis() << "}\n";
 
     std::lock_guard<std::mutex> lock(outputMutex_);
-    std::cout << "{\"event\":\"audio-device-watch\",\"schemaVersion\":1,\"type\":\""
-              << wideToUtf8(eventName) << "\",\"deviceId\":\""
-              << jsonEscape(wideToUtf8(deviceId ? deviceId : L"")) << "\",\"deviceName\":\""
-              << jsonEscape(wideToUtf8(name)) << "\"";
-    if (extraJson) {
-        std::cout << "," << extraJson;
-    }
-    std::cout << ",\"timestampMs\":" << nowUnixMillis() << "}" << std::endl;
+    std::cout << line.str() << std::flush;
 }
 
 ULONG STDMETHODCALLTYPE WasapiDeviceWatcher::AddRef() {
@@ -189,20 +265,25 @@ HRESULT STDMETHODCALLTYPE WasapiDeviceWatcher::QueryInterface(REFIID riid, void*
     return E_NOINTERFACE;
 }
 
+// Every method below runs on a COM callback thread and must be nonblocking per
+// IMMNotificationClient's documented contract: no name resolution, no I/O, no
+// lock that can wait. Each one only copies its arguments and enqueues them --
+// see workerLoop() for where the real work happens.
+
 HRESULT STDMETHODCALLTYPE WasapiDeviceWatcher::OnDeviceStateChanged(LPCWSTR deviceId, DWORD newState) {
     char extra[64];
     snprintf(extra, sizeof(extra), "\"state\":\"%s\"", deviceStateLabel(newState).c_str());
-    emitDeviceEvent(L"state-changed", deviceId, extra);
+    enqueue(L"state-changed", deviceId, extra);
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE WasapiDeviceWatcher::OnDeviceAdded(LPCWSTR deviceId) {
-    emitDeviceEvent(L"added", deviceId);
+    enqueue(L"added", deviceId, nullptr);
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE WasapiDeviceWatcher::OnDeviceRemoved(LPCWSTR deviceId) {
-    emitDeviceEvent(L"removed", deviceId);
+    enqueue(L"removed", deviceId, nullptr);
     return S_OK;
 }
 
@@ -216,7 +297,7 @@ HRESULT STDMETHODCALLTYPE WasapiDeviceWatcher::OnDefaultDeviceChanged(
     }
     char extra[16];
     snprintf(extra, sizeof(extra), "\"flow\":\"%s\"", flow == eRender ? "render" : "capture");
-    emitDeviceEvent(L"default-changed", defaultDeviceId, extra);
+    enqueue(L"default-changed", defaultDeviceId, extra);
     return S_OK;
 }
 

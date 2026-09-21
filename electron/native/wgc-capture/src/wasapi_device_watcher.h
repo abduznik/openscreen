@@ -27,14 +27,22 @@
 // correlated with the moment the user hears the drop, points at (1) or (3). No event
 // at all around the drop, with the endpoint remaining ACTIVE throughout, would point
 // at (2) instead.
+//
+// IMMNotificationClient callbacks must be nonblocking (never resolve names, take a
+// lock that can wait, or do I/O) per Microsoft's documented contract, so the
+// callbacks here only copy their arguments into a PendingEvent and hand it to a
+// worker thread, which does the (possibly slow) name lookup and the actual write.
 
 #include <Windows.h>
 #include <mmdeviceapi.h>
 #include <wrl/client.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <mutex>
+#include <queue>
 #include <string>
+#include <thread>
 
 class WasapiDeviceWatcher : public IMMNotificationClient {
 public:
@@ -44,10 +52,12 @@ public:
     WasapiDeviceWatcher(const WasapiDeviceWatcher&) = delete;
     WasapiDeviceWatcher& operator=(const WasapiDeviceWatcher&) = delete;
 
-    // Registers for notifications and emits one baseline event per endpoint
+    // Registers for notifications and enqueues one baseline event per endpoint
     // (render + capture) with their state at the moment the recording starts, so a
     // report has a starting point even if nothing changes afterward.
     bool start();
+    // Unregisters callbacks, drains the queue, and joins the worker before
+    // returning, so every event queued before stop() is guaranteed to be written.
     void stop();
 
     // IUnknown
@@ -63,13 +73,33 @@ public:
     HRESULT STDMETHODCALLTYPE OnPropertyValueChanged(LPCWSTR deviceId, const PROPERTYKEY key) override;
 
 private:
-    void emitBaseline(EDataFlow flow, const wchar_t* flowLabel);
-    void emitDeviceEvent(const wchar_t* eventName, LPCWSTR deviceId, const char* extraJson = nullptr);
+    struct PendingEvent {
+        std::wstring eventName;
+        std::wstring deviceId;
+        std::string extraJson;
+        // Baseline events resolve the endpoint themselves (they run on start(), not
+        // a callback thread, so there is no blocking concern) and need no lookup.
+        bool needsBaselineLookup = false;
+        EDataFlow baselineFlow = eRender;
+        std::wstring baselineFlowLabel;
+    };
+
+    void enqueue(const wchar_t* eventName, LPCWSTR deviceId, const char* extraJson);
+    void enqueueBaseline(EDataFlow flow, const wchar_t* flowLabel);
+    void workerLoop();
+    void writeDeviceEvent(const PendingEvent& event);
+    void writeBaseline(const PendingEvent& event);
 
     std::atomic<ULONG> refCount_ = 1;
     Microsoft::WRL::ComPtr<IMMDeviceEnumerator> deviceEnumerator_;
     bool registered_ = false;
-    // Guards std::cout: notifications can arrive on a COM callback thread
-    // concurrently with the main thread's own JSON event writes.
+
+    std::thread worker_;
+    std::mutex queueMutex_;
+    std::condition_variable queueCv_;
+    std::queue<PendingEvent> queue_;
+    bool workerStopRequested_ = false;
+    // Guards std::cout so the worker's writes and main.cpp's own JSON event writes
+    // don't interleave into a malformed line.
     std::mutex outputMutex_;
 };

@@ -77,7 +77,16 @@ bool WasapiRenderKeepAlive::start() {
     }
 
     thread_ = std::thread([this] {
+        // GetBuffer/ReleaseBuffer/GetCurrentPadding are called from this thread,
+        // which is otherwise never COM-initialized. Both this and the wmain thread
+        // are MTA (see winrt::init_apartment in main.cpp), so no marshaling is
+        // needed -- this only satisfies the "calling thread must be initialized"
+        // requirement.
+        const HRESULT comInit = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         renderLoop();
+        if (SUCCEEDED(comInit)) {
+            CoUninitialize();
+        }
     });
     return true;
 }
