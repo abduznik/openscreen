@@ -46,6 +46,8 @@ add_executable(wgc-capture
   src/mf_encoder.h
   src/monitor_utils.cpp
   src/monitor_utils.h
+  src/wasapi_device_watcher.cpp
+  src/wasapi_device_watcher.h
   src/wasapi_loopback_capture.cpp
   src/wasapi_loopback_capture.h
   src/webcam_capture.cpp

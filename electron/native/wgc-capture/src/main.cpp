@@ -2,6 +2,7 @@
 #include "dpi_awareness.h"
 #include "mf_encoder.h"
 #include "monitor_utils.h"
+#include "wasapi_device_watcher.h"
 #include "wasapi_loopback_capture.h"
 #include "webcam_capture.h"
 #include "wgc_session.h"
@@ -796,6 +797,19 @@ int wmain(int argc, wchar_t* argv[]) {
 
     WasapiLoopbackCapture loopbackCapture;
     WasapiLoopbackCapture microphoneCapture;
+    // getopenscreen/openscreen#724, diagnostic only: logs render/capture endpoint
+    // state transitions for the duration of the recording, so a report of a headset
+    // dropping mid-take can be correlated against a real timestamped Windows event
+    // instead of guessed at. Does not change recording behavior in any way.
+    const bool deviceWatchEnabled = readEnvInt("OPENSCREEN_WGC_LOG_AUDIO_DEVICE_EVENTS", 0) == 1;
+    WasapiDeviceWatcher deviceWatcher;
+    bool deviceWatchActive = false;
+    const auto stopDeviceWatchIfActive = [&]() {
+        if (deviceWatchActive) {
+            deviceWatcher.stop();
+            deviceWatchActive = false;
+        }
+    };
     const AudioInputFormat* audioFormat = nullptr;
     AudioInputFormat encoderAudioFormat{};
     AudioInputFormat systemAudioFormat{};
@@ -1378,13 +1392,23 @@ int wmain(int argc, wchar_t* argv[]) {
         return true;
     };
 
+    if (deviceWatchEnabled) {
+        deviceWatchActive = deviceWatcher.start();
+        if (!deviceWatchActive) {
+            std::cerr << "WARNING: Failed to start audio device watcher; continuing without it"
+                      << std::endl;
+        }
+    }
+
     if (!startAudioCaptures()) {
+        stopDeviceWatchIfActive();
         return 1;
     }
     if (config.webcamEnabled) {
         if (!webcamCapture.start()) {
             microphoneCapture.stop();
             loopbackCapture.stop();
+            stopDeviceWatchIfActive();
             if (audioMixer) {
                 audioMixer->stop();
             }
@@ -1416,6 +1440,7 @@ int wmain(int argc, wchar_t* argv[]) {
         webcamCapture.stop();
         microphoneCapture.stop();
         loopbackCapture.stop();
+        stopDeviceWatchIfActive();
         if (audioMixer) {
             audioMixer->stop();
         }
@@ -1459,6 +1484,7 @@ int wmain(int argc, wchar_t* argv[]) {
         stopVideoWriter();
         microphoneCapture.stop();
         loopbackCapture.stop();
+        stopDeviceWatchIfActive();
         webcamCapture.stop();
         if (audioMixer) {
             audioMixer->stop();
@@ -1594,6 +1620,11 @@ int wmain(int argc, wchar_t* argv[]) {
     beginStopStep("loopback", stepBudgetMs);
     loopbackCapture.stop();
     logStopStep("loopback");
+    if (deviceWatchActive) {
+        beginStopStep("device-watcher", stepBudgetMs);
+        stopDeviceWatchIfActive();
+        logStopStep("device-watcher");
+    }
     beginStopStep("webcam", stepBudgetMs);
     webcamCapture.stop();
     logStopStep("webcam");
