@@ -9,9 +9,11 @@
 // alive, and loopback capture already does that as a side effect when it runs.
 //
 // This opens an ordinary render stream on the same default output device and
-// writes a near-inaudible tone to it for as long as a recording is running,
-// independent of whether system audio is being captured, since mic-only is
-// exactly the case that leaves the endpoint untouched otherwise.
+// writes a near-inaudible tone to it for as long as a recording is running. It
+// only runs when system audio is NOT being captured: loopback capture already
+// fills the endpoint with real content of its own, so there is nothing to keep
+// alive, and anything written here alongside it would end up in the recording's
+// system-audio track.
 //
 // Real signal, not digital silence: confirmed on real hardware that writing
 // AUDCLNT_BUFFERFLAGS_SILENT packets does not reliably stop a wireless headset's
@@ -25,11 +27,16 @@
 // A first attempt at 1kHz / 1% amplitude was clearly audible in testing -- 1kHz
 // sits in the most sensitive part of human hearing, so "quiet" in raw amplitude
 // terms was still perceptibly loud. The tone is now 19kHz (above what the large
-// majority of adults can hear at all) at 0.3% amplitude, adapted downward if the
-// device's actual sample rate can't represent 19kHz cleanly. It is never captured
-// into the recording itself, since this writes to the render endpoint and the
-// recording only captures it when system-audio (loopback) is also on -- the same
-// case that already doesn't need this workaround.
+// majority of adults can hear at all) at 0.3% amplitude. It is not adapted to the
+// device: on a mix format whose sample rate cannot represent 19kHz with margin,
+// start() refuses to run at all rather than alias it into an audible frequency.
+// The tone is never captured into the recording itself, because this stream only
+// exists when loopback capture is off.
+//
+// Known limitation: the stream targets whatever the default render endpoint is at
+// start and never re-targets. If the user switches output devices mid-take, the
+// new default is not protected for the rest of the recording (the device watcher,
+// if enabled, logs the switch).
 //
 // Kill-switch: set OPENSCREEN_WGC_DISABLE_AUDIO_KEEPALIVE=1 to turn this off.
 
@@ -49,9 +56,10 @@ public:
     WasapiRenderKeepAlive(const WasapiRenderKeepAlive&) = delete;
     WasapiRenderKeepAlive& operator=(const WasapiRenderKeepAlive&) = delete;
 
-    // Opens the default render endpoint in shared mode and starts writing silence.
-    // Returns false on any failure -- including another app holding the device
-    // exclusively -- which callers must treat as non-fatal to the recording itself.
+    // Opens the default render endpoint in shared mode and starts writing the
+    // keep-alive tone. Returns false on any failure -- including another app
+    // holding the device exclusively -- which callers must treat as non-fatal to
+    // the recording itself.
     bool start();
     void stop();
 

@@ -26,7 +26,17 @@
 // A DEVICE_STATE_NOTPRESENT/UNPLUGGED transition on the render or capture endpoint,
 // correlated with the moment the user hears the drop, points at (1) or (3). No event
 // at all around the drop, with the endpoint remaining ACTIVE throughout, would point
-// at (2) instead.
+// at (2) instead -- but the converse does not hold: the confirmed case in #724
+// (Corsair Void Wireless) produced zero events across every live drop, because the
+// USB dongle stays enumerated and ACTIVE the whole time and only the RF link to the
+// earcups drops, which is invisible to IMMNotificationClient. So silence here does
+// not rule out a firmware timer; before concluding (2), check the vendor's own
+// power management (e.g. iCUE) and a with-loopback vs mic-only comparison.
+//
+// Events are written to stderr, as one complete line per write: thread-emitted
+// events go to stderr in this helper (the microphone-defaulted warning set that
+// precedent), leaving stdout protocol lines owned by the main thread alone. Both
+// streams end up merged in the drained helper log.
 //
 // IMMNotificationClient callbacks must be nonblocking (never resolve names, take a
 // lock that can wait, or do I/O) per Microsoft's documented contract, so the
@@ -99,7 +109,4 @@ private:
     std::condition_variable queueCv_;
     std::queue<PendingEvent> queue_;
     bool workerStopRequested_ = false;
-    // Guards std::cout so the worker's writes and main.cpp's own JSON event writes
-    // don't interleave into a malformed line.
-    std::mutex outputMutex_;
 };

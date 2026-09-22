@@ -129,8 +129,12 @@ void WasapiDeviceWatcher::stop() {
         deviceEnumerator_->UnregisterEndpointNotificationCallback(this);
     }
     registered_ = false;
-    deviceEnumerator_.Reset();
 
+    // The worker dereferences deviceEnumerator_ (writeBaseline calls
+    // GetDefaultAudioEndpoint through it), and stop() can run while events are
+    // still queued -- main.cpp calls this on every early-failure path, potentially
+    // right after start() enqueued the baselines. Drain and join first, release
+    // the enumerator last, or the worker wakes up holding a dangling pointer.
     if (worker_.joinable()) {
         {
             std::lock_guard<std::mutex> lock(queueMutex_);
@@ -139,11 +143,12 @@ void WasapiDeviceWatcher::stop() {
         queueCv_.notify_one();
         worker_.join();
     }
+    deviceEnumerator_.Reset();
 }
 
 void WasapiDeviceWatcher::workerLoop() {
-    // This thread owns all name resolution and all std::cout writes for this
-    // watcher, so nothing here runs on an IMMNotificationClient callback thread.
+    // This thread owns all name resolution and all event writes for this watcher,
+    // so nothing here runs on an IMMNotificationClient callback thread.
     while (true) {
         PendingEvent event;
         {
@@ -197,9 +202,10 @@ void WasapiDeviceWatcher::writeBaseline(const PendingEvent& event) {
     device->GetState(&state);
     const std::wstring name = friendlyNameForDevice(deviceEnumerator_.Get(), id);
 
-    // Built as one complete string before the write, and written with a single
-    // stream operation under outputMutex_, so main.cpp's own JSON writes can't
-    // land in the middle of this line.
+    // Built as one complete string before the write, and emitted with a single
+    // stream operation. Events from helper threads go to stderr -- the
+    // microphone-defaulted warning set that precedent -- so stdout protocol
+    // lines stay owned by the main thread alone.
     std::ostringstream line;
     line << "{\"event\":\"audio-device-watch\",\"schemaVersion\":1,\"type\":\"baseline\","
             "\"flow\":\""
@@ -207,8 +213,7 @@ void WasapiDeviceWatcher::writeBaseline(const PendingEvent& event) {
          << "\",\"deviceName\":\"" << jsonEscape(wideToUtf8(name)) << "\",\"state\":\""
          << deviceStateLabel(state) << "\",\"timestampMs\":" << nowUnixMillis() << "}\n";
 
-    std::lock_guard<std::mutex> lock(outputMutex_);
-    std::cout << line.str() << std::flush;
+    std::cerr << line.str() << std::flush;
 }
 
 void WasapiDeviceWatcher::enqueue(const wchar_t* eventName, LPCWSTR deviceId, const char* extraJson) {
@@ -236,8 +241,7 @@ void WasapiDeviceWatcher::writeDeviceEvent(const PendingEvent& event) {
     }
     line << ",\"timestampMs\":" << nowUnixMillis() << "}\n";
 
-    std::lock_guard<std::mutex> lock(outputMutex_);
-    std::cout << line.str() << std::flush;
+    std::cerr << line.str() << std::flush;
 }
 
 ULONG STDMETHODCALLTYPE WasapiDeviceWatcher::AddRef() {
@@ -295,7 +299,9 @@ HRESULT STDMETHODCALLTYPE WasapiDeviceWatcher::OnDefaultDeviceChanged(
     if (role != eConsole) {
         return S_OK;
     }
-    char extra[16];
+    // Sized for the longest payload: "flow":"capture" is 16 chars plus the
+    // terminator, and 16 bytes truncates the closing quote into a malformed line.
+    char extra[32];
     snprintf(extra, sizeof(extra), "\"flow\":\"%s\"", flow == eRender ? "render" : "capture");
     enqueue(L"default-changed", defaultDeviceId, extra);
     return S_OK;
