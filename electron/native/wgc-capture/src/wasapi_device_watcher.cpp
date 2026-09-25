@@ -147,6 +147,17 @@ void WasapiDeviceWatcher::stop() {
 }
 
 void WasapiDeviceWatcher::workerLoop() {
+    // GetDefaultAudioEndpoint/GetDevice/CoTaskMemFree are called from this thread,
+    // which is otherwise never COM-initialized. Both this and the wmain thread are
+    // MTA (see winrt::init_apartment in main.cpp), so no marshaling is needed --
+    // this only satisfies the "calling thread must be initialized" requirement.
+    const HRESULT comInit = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(comInit)) {
+        std::cerr << "WARNING: [device-watcher] CoInitializeEx(COINIT_MULTITHREADED) failed (hr=0x"
+                  << std::hex << comInit << std::dec << ")" << std::endl;
+        return;
+    }
+
     // This thread owns all name resolution and all event writes for this watcher,
     // so nothing here runs on an IMMNotificationClient callback thread.
     while (true) {
@@ -156,7 +167,7 @@ void WasapiDeviceWatcher::workerLoop() {
             queueCv_.wait(lock, [this] { return !queue_.empty() || workerStopRequested_; });
             if (queue_.empty()) {
                 if (workerStopRequested_) {
-                    return;
+                    break;
                 }
                 continue;
             }
@@ -170,6 +181,7 @@ void WasapiDeviceWatcher::workerLoop() {
             writeDeviceEvent(event);
         }
     }
+    CoUninitialize();
 }
 
 void WasapiDeviceWatcher::enqueueBaseline(EDataFlow flow, const wchar_t* flowLabel) {
